@@ -1,0 +1,11 @@
+# Ignore certain file types
+*.xlsx
+*.docx
+*.pptx
+*.xlsm
+*.csv
+*.xls
+*.Rdata
+*.html
+metadat.yaml
+.Rproj.user

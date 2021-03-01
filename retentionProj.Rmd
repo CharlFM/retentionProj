@@ -6,6 +6,7 @@ output:
   rmdformats::material:
     self_contained: true
     thumbnails: false
+    code_folding: hide
     lightbox: false
 ---
 
@@ -30,9 +31,355 @@ opts_knit$set(width = 75)
 
 # Setup and Loading Data
 
-# Data Wrangling
+In this section we will load all the libraries needed to perform our analysis as well as the raw data we received.
 
-# Exploratiry Data Analysis
+```{r}
+options(scipen = 999)
+library(dplyr)
+library(readr)
+
+crmDat   <- readr::read_csv("0_data/crm_model.csv")
+finDat   <- readr::read_csv("0_data/finance_model.csv")
+salesDat <- readr::read_csv("0_data/sales_model.csv")
+twiter   <- readr::read_csv("0_data/twitter_model.csv")
+```
+<br>
+
+# Data Wrangling {.tabset .tabset-fade}
+
+Here we will inspect the individual datasets to first find a way to combine them into a single dataset that we can use for the rest of the project.
+
+## Sales Data
+
+The sales data can be considered as the core dataset, since it is the dataset containing the target variable. A first check would be to check the dimensions and a quick glance of the dataset.
+
+```{r}
+dim(salesDat)
+```
+<br>
+
+Here we can see we have `4153` observations and `24` variables.
+
+```{r}
+set.seed(2021)
+salesDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+This table contains the service and customer information. From first glance it seems that there are a lot of cleaning up to do as well as potential feature engineering.
+
+What we need to do to properly merge our datasets is to define a unique key, the `ID_SALES` would be the logical first step. Let's see if this is a well defined (unique) identifier.
+
+```{r}
+salesDat %>% count(ID_SALES) %>% pull(n) %>% unique()
+```
+<br>
+
+Indeed this suggests that each row is uniquely identifiable by the `ID_SALES`. We will identify ways to join the other datasets with this dataset in order to get our final dataset that we will work with.
+
+## CRM Data {.tabset .tabset-fade}
+
+We will perform a similar operation as before as a first inspection.
+
+```{r}
+dim(crmDat)
+```
+<br>
+
+What we can see here as a first observation is that the number of observations is `5` less than the sales data. Let's take a look at a sample of the data.
+
+```{r}
+set.seed(2021)
+crmDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Looking at the data, and trying to establish some link to the sales data, it seems that the ID is the only natural link, however, it clearly doesn't properly link the 2 tables :
+
+```{r}
+salesDat %>% 
+  dplyr::left_join((crmDat %>% mutate(fromCRM = 1) %>% select(ID_CRM, fromCRM)), by = c("ID_SALES" = "ID_CRM")) %>% 
+  dplyr::filter(fromCRM == 1)
+```
+<br>
+
+### Sales ID
+
+However, perhaps part of the ID might make for a proper match - after inspecting the data a bit it seems that the `ID_SALES` is made up of 3 parts, the `Program_Code` + `ID` + `Travel_Type`. Let's see if we split up the `ID_SALES` in these 3 parts if we can reconcile the components and get the original `ID` back :
+
+```{r}
+salesDat <- salesDat %>% 
+  mutate(id_progCode = stringr::str_sub(ID_SALES, start = 1,  end = nchar(Program_Code)),
+         id_travType = stringr::str_sub(ID_SALES, start = -nchar(Travel_Type)),
+         id_actual   = stringr::str_replace(string = ID_SALES,  pattern = id_progCode, replacement = ""),
+         id_actual   = stringr::str_replace(string = id_actual, pattern = paste0(id_travType, "$"), replacement = ""))
+
+set.seed(2021)
+salesDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Let's see if the components are indeed as we expect :
+
+```{r}
+salesDat %>% filter(id_progCode != Program_Code)
+```
+```{r}
+salesDat %>% filter(id_travType != Travel_Type) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+So we can see that the `Pogram_Code` is always the first part of the `ID_SALES` and indeed the `Travel_Type` is almost always the end (except for the 3 cases above).
+
+We should flag these 3 cases out from the sales data since the "true ID" might, for example, either be `1211` or `12110`.
+
+Next we will see whether these `id_actual`'s are indeed unique or not :
+
+```{r}
+salesDat %>% count(id_actual) %>% count(n)
+```
+<br>
+
+It seems that the way we defined the new ID is enough to uniquely define each sale.
+
+### CRM ID
+
+Taking another look at the CRM data 
+
+```{r}
+set.seed(2021)
+crmDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Here we can spot that the `ID_CRM` is made up of `Poverty_Code` + `ID` + `Income_Level`. From looking at the data we also notice that the `Poverty_Code` is always either 0 or NA :
+
+```{r}
+crmDat$Poverty_Code %>% table(useNA = "always")
+```
+<br>
+
+The first character of the `ID_CRM` is always 0 if the the `Poverty_Code` is 0, otherwise it is either `A`, `B`, `C`, `D` or `E` :
+
+```{r}
+crmDat <- crmDat %>% 
+  mutate(id_povCode = stringr::str_sub(string = ID_CRM, start = 1, end = 1))
+crmDat %>% filter(Poverty_Code == 0) %>% filter(Poverty_Code != id_povCode)
+```
+<br>
+
+Indeed it seems to be that if the `Poverty_Code = 0` then we have that the first character of the `ID_CRM` is the same. This leads to believe that the `Poverty_Code` is not completed, and can hence be inferred from the first character of the `ID_CRM`. It is further supported by the fact that the result seems to be aligned with a ranking `A`, `B`, `C`... is and ordered variable.
+
+```{r}
+table(crmDat$id_povCode, useNA = "always")
+```
+<br>
+
+To conclude the test we can also check to see if the following character is a numeric type, as it seems that the true ID is always numeric.
+
+```{r}
+tst <- crmDat %>% 
+  mutate(id_numTest = stringr::str_sub(string = ID_CRM, start = 2, end = 2)) %>% 
+  pull(id_numTest) %>% as.numeric()
+sum(is.na(tst))
+```
+<br>
+
+It seem to work as we suspected. Let's consider this as the case as we continue with the merge test. Next we will extract the income level from the `ID_CRM` and reconcile with the original `Income_Level`.
+
+```{r}
+crmDat <- crmDat %>% 
+  mutate(id_incLev = stringr::str_sub(ID_CRM, start = -nchar(Income_Level)),
+         id_actual = stringr::str_replace(string = ID_CRM,    pattern = id_povCode, replacement = ""),
+         id_actual = stringr::str_replace(string = id_actual, pattern = paste0(id_incLev, "$"), replacement = ""))
+
+crmDat %>% filter(id_incLev != Income_Level)
+```
+<br>
+
+Indeed the income level can be obtained by extracting the last part of the `ID_CRM`. We will next take a look to see if the `id_actual` uniquely defines the dataset.
+
+```{r}
+crmDat %>% count(id_actual) %>% count(n)
+```
+<br>
+
+Again, it seems as if we found another way to uniquely identify a dataset. The CRM data can now potentially be reconciled with the Sales data based on the new IDs.
+
+### Merge
+
+```{r}
+sales_crm <- salesDat %>% 
+  left_join((crmDat %>% mutate(fromCRM = 1)), by = "id_actual") 
+
+sales_crm %>% dplyr::filter(is.na(fromCRM)) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Here we only find `5` observations that does not merge back with the Sales data. This is to be expected since the CRM data has `5` rows less than the sales data.
+
+Since we have the Sales and CRM data captured in a single dataset called `sales_crm`, we can now remove the 2 original datasets.
+
+```{r}
+rm(salesDat, crmDat, tst)
+```
+
+## Financial Data {.tabset .tabset-fade}
+
+We will perform a similar operation as before as a first inspection.
+
+```{r}
+dim(finDat)
+```
+<br>
+
+Here we can see that as we have seen before the number of rows for the 
+
+```{r}
+set.seed(2021)
+finDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Looking at the data extract the link between this table and the Sales/CRM data is the variable `ID_FINANCE`, but as we know the binding key is a numeric value, which isn't the case for the Finance data.
+
+However, let's confirm that the `ID_FINANCE` uniquely defines the dataset :
+
+```{r}
+finDat %>% count(ID_FINANCE) %>% count(n)
+```
+<br>
+
+Indeed it is the case that `ID_FINANCE` uniquely defines each row.
+
+### Fin ID
+
+From the data we saw before, we can deduce that the `ID_FINANCE` can be decomposed as `Special_Pay` + `ID`. Let's take a look to see if this is an appropriate decomposition. However when `Special_Pay = 0` then there is no concatenation. Furthermore, we find that when `Special_Pay` is `NA`, then the concatenation is `NA` + `ID`.
+
+```{r}
+finDat <- finDat %>% 
+  mutate(Special_Pay = dplyr::if_else(is.na(Special_Pay), "NA", Special_Pay),
+         id_specPay  = dplyr::if_else(Special_Pay == "0", "0", stringr::str_sub(ID_FINANCE, start = 1,  end = nchar(Special_Pay))),
+         id_actual   = dplyr::if_else(Special_Pay == "0", 
+                                      ID_FINANCE, 
+                                      stringr::str_replace(string = ID_FINANCE, pattern = id_specPay, replacement = "")))
+set.seed(2021)
+finDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Let's see if the `Special_Pay` reconciles with the derived Special pay from the `ID_FINANCE`.
+
+```{r}
+finDat %>% filter(Special_Pay != id_specPay)
+```
+<br>
+
+Indeed here we find that the `Special_Pay` can be fully extracted from the `ID_FINANCE`. Let's see if the newly derived ID uniquely defines the dataset.
+
+```{r}
+finDat %>% count(id_actual) %>% count(n)
+```
+<br>
+
+We find that it does indeed uniquely define the dataset. As a final step we will merge the financial data with the previously obtained Sales and CRM data.
+
+### Merge
+
+```{r}
+fin_sales_crm <- sales_crm %>% 
+  left_join((finDat %>% mutate(fromFIN = 1)), by = "id_actual") 
+
+fin_sales_crm %>% dplyr::filter(is.na(fromFIN)) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+From this we find `5` observations that does not merge back with the Sales/CRM data. we would expect `2` claims to be missing as the natural consequence that the financial data has `2` observations less than the original sales data. This leaves us with `3` observations from the financial data these does not merge with the Sales/CRM. Looking at the bigger picture this is a miss-match of $3/4153 = 0.00072$ which is $0.072\%$. 
+
+We can clean up the workspace by removing the previous datasets no longer needed.
+
+```{r}
+rm(finDat, sales_crm)
+```
+
+## Twitter Data {.tabset .tabset-fade}
+
+The twitter data is significantly different from the rest, except in one way, the merge is straightforward. Let's take a look at the dimention and a sample of the twitter data.
+
+```{r}
+dim(twiter)
+```
+<br>
+
+```{r}
+set.seed(2021)
+twiter %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+### VS Sales Data
+
+It seems that the tweet data is simply the text tweeted by a particular customer, linked to the `ID_SALES` variable. Let's see if there are any tweets that cannot be mapped back to our Sales data.
+
+```{r}
+fin_sales_crm %>% 
+  left_join((twiter %>% distinct(ID_SALES) %>% mutate(fromTWT = 1)), by = "ID_SALES") %>% 
+  filter(is.na(fromTWT)) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+<br>
+
+Here we can see that there were `5` customers that did not send any tweets. Meaning `4148` customers did send tweets.
+
+```{r}
+twiter %>% 
+  filter(ID_SALES %in% fin_sales_crm$ID_SALES) %>% 
+  nrow()
+```
+<br>
+
+We also find every ID in the twitter dataset in the sales data, implying that there aren't any tweets from people outside our original Sales data - this is good!
+
+### Twitter Details
+
+Next we will take a look at the details about the twitter data. As we saw there are much more observations in the tweet data than the sales data, this is because one customer can tweet multiple times.
+
+```{r}
+twiter %>% count(ID_SALES) %>% summary() 
+```
+<br>
+
+From this we can see that we have either 3 or 4 tweets per customer (mostly 3). 
+
+We will leave the twitter data separate from the other dataset for now, since it would be better to first perform a sentiment analysis and then merge the result back so that we have our final dataset that we can perform an EDA on and furthermore proceed with the modelling as well.
+
+## Final Notes
+
+Due to the limited knowledge of the datasets we work with, we were forced to take some educated guesses. In reality, we would confirm our understanding of how the data are linked together and if our understanding of how the variables work and can be interpreted from the IT department and with other relevant stakeholders.
+
+# Exploratory Data Analysis (EDA)
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

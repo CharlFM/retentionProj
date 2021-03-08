@@ -38,12 +38,78 @@ options(scipen = 999)
 library(dplyr)
 library(readr)
 
-crmDat   <- readr::read_csv("0_data/crm_model.csv")
-finDat   <- readr::read_csv("0_data/finance_model.csv")
-salesDat <- readr::read_csv("0_data/sales_model.csv")
-twiter   <- readr::read_csv("0_data/twitter_model.csv")
+crmDat   <- readr::read_csv("0_data/crm_model.csv",     col_types = cols(.default = "c"))
+finDat   <- readr::read_csv("0_data/finance_model.csv", col_types = cols(.default = "c"))
+salesDat <- readr::read_csv("0_data/sales_model.csv",   col_types = cols(.default = "c"))
+twiter   <- readr::read_csv("0_data/twitter_model.csv", col_types = cols(.default = "c"))
 ```
 <br>
+
+Here are the custom functions we define for the project.
+
+```{r}
+propFunc <- function(datIn, vars, totToReturn, asDF = TRUE) {
+    outpList <- list()
+    for (vr in vars) {
+        varSelected <- datIn[[vr]]
+        varSelected[grepl(x = varSelected, pattern = "NA", 
+            ignore.case = TRUE)] <- NA
+        outp <- as.data.frame(prop.table(table(varSelected, useNA = "always")))
+        NAValue <- outp$Freq[is.na(outp$varSelected)]
+        outp <- outp[!is.na(outp$varSelected), ]
+        outp <- outp[order(-outp$Freq), ]
+        FinalOutp <- data.frame(varSelected = "NA", Freq = NAValue)
+        ender <- min((totToReturn - 1), nrow(outp))
+        toDrop <- nrow(outp) - ender
+        toDropData <- data.frame(varSelected = c("Rest", 
+            "RestCount"), Freq = c(ifelse(nrow(outp) == 
+            0, 0, toDrop/nrow(outp)), toDrop))
+        if (nrow(outp) > 0) {
+            FinalOutp <- rbind(FinalOutp, outp[1:ender, ], toDropData)
+        }
+        else {
+            FinalOutp <- rbind(FinalOutp, toDropData)
+        }
+        FinalOutp$Freq <- round(FinalOutp$Freq, 4)
+        tempList <- list(FinalOutp$Freq)
+        names(tempList) <- vr
+        names(tempList[[1]]) <- FinalOutp$varSelected
+        outpList <- append(outpList, tempList)
+    }
+    if (asDF) {
+        for (ii in 1:length(outpList)) {
+            rowVals <- outpList[ii]
+            rowValsNames <- names(rowVals[[1]])
+            tempDf <- as.data.frame(rowVals)
+            rownames(tempDf) <- rowValsNames
+            tempDf <- t(tempDf)
+            RestRestCount <- t(as.data.frame(tempDf[, c(c("Rest", 
+                "RestCount"))]))
+            rownames(RestRestCount) <- "1"
+            otherDat <- tempDf[, !(colnames(tempDf) %in% c("Rest", 
+                "RestCount"))]
+            finDat <- t(data.frame(paste0(names(otherDat), " : ", 
+                otherDat)))
+            rownames(finDat) <- "1"
+            colnames(finDat) <- paste0("Var_", seq(1:dim(finDat)[2]))
+            finDat <- cbind(finDat, RestRestCount)
+            finDat <- as.data.frame(finDat)
+            if (ii == 1) {
+                combinedFinDat <- finDat
+            }
+            else {
+                combinedFinDat <- dplyr::bind_rows(combinedFinDat, 
+                  finDat)
+            }
+        }
+        rownames(combinedFinDat) <- names(outpList)
+        outpList <- combinedFinDat
+        outpList <- dplyr::select(outpList, -c(Rest, RestCount), 
+            everything())
+    }
+    return(outpList)
+}
+```
 
 # Data Wrangling {.tabset .tabset-fade}
 
@@ -157,52 +223,32 @@ crmDat %>% sample_n(., 10) %>%
 ```
 <br>
 
-Here we can spot that the `ID_CRM` is made up of `Poverty_Code` + `ID` + `Income_Level`. From looking at the data we also notice that the `Poverty_Code` is always either 0 or NA :
-
-```{r}
-crmDat$Poverty_Code %>% table(useNA = "always")
-```
-<br>
-
-The first character of the `ID_CRM` is always 0 if the the `Poverty_Code` is 0, otherwise it is either `A`, `B`, `C`, `D` or `E` :
+Here we can spot that the `ID_CRM` is made up of `Poverty_Code` + `ID` + `Income_Level`. Let's see if we split up the `ID_CRM` in these 3 parts if we can reconcile the components and get the original `ID` back :
 
 ```{r}
 crmDat <- crmDat %>% 
-  mutate(id_povCode = stringr::str_sub(string = ID_CRM, start = 1, end = 1))
-crmDat %>% filter(Poverty_Code == 0) %>% filter(Poverty_Code != id_povCode)
+  mutate(id_povCode = stringr::str_sub(string = ID_CRM, start = 1, end = nchar(Poverty_Code)),
+         id_incLev  = stringr::str_sub(ID_CRM, start = -nchar(Income_Level)),
+         id_actual  = stringr::str_replace(string = ID_CRM,    pattern = id_povCode, replacement = ""),
+         id_actual  = stringr::str_replace(string = id_actual, pattern = paste0(id_incLev, "$"), replacement = ""))
+
+set.seed(2021)
+crmDat %>% sample_n(., 10) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
 ```
 <br>
 
-Indeed it seems to be that if the `Poverty_Code = 0` then we have that the first character of the `ID_CRM` is the same. This leads to believe that the `Poverty_Code` is not completed, and can hence be inferred from the first character of the `ID_CRM`. It is further supported by the fact that the result seems to be aligned with a ranking `A`, `B`, `C`... is and ordered variable.
+Let's see if the components are indeed as we expect :
 
 ```{r}
-table(crmDat$id_povCode, useNA = "always")
+crmDat %>% filter(Poverty_Code != id_povCode)
 ```
-<br>
-
-To conclude the test we can also check to see if the following character is a numeric type, as it seems that the true ID is always numeric.
-
 ```{r}
-tst <- crmDat %>% 
-  mutate(id_numTest = stringr::str_sub(string = ID_CRM, start = 2, end = 2)) %>% 
-  pull(id_numTest) %>% as.numeric()
-sum(is.na(tst))
+crmDat %>% filter(Income_Level != id_incLev)
 ```
 <br>
 
-It seem to work as we suspected. Let's consider this as the case as we continue with the merge test. Next we will extract the income level from the `ID_CRM` and reconcile with the original `Income_Level`.
-
-```{r}
-crmDat <- crmDat %>% 
-  mutate(id_incLev = stringr::str_sub(ID_CRM, start = -nchar(Income_Level)),
-         id_actual = stringr::str_replace(string = ID_CRM,    pattern = id_povCode, replacement = ""),
-         id_actual = stringr::str_replace(string = id_actual, pattern = paste0(id_incLev, "$"), replacement = ""))
-
-crmDat %>% filter(id_incLev != Income_Level)
-```
-<br>
-
-Indeed the income level can be obtained by extracting the last part of the `ID_CRM`. We will next take a look to see if the `id_actual` uniquely defines the dataset.
+Indeed, both the columns `Income_level` and `Poverty_Code` can be obtained or extracted from the `CRM_ID` to obtain the final and clean `ID`. Let's see if this `id_actual` is able to uniquely define the dataset.
 
 ```{r}
 crmDat %>% count(id_actual) %>% count(n)
@@ -215,7 +261,8 @@ Again, it seems as if we found another way to uniquely identify a dataset. The C
 
 ```{r}
 sales_crm <- salesDat %>% 
-  left_join((crmDat %>% mutate(fromCRM = 1)), by = "id_actual") 
+  select(-c(id_progCode, id_travType)) %>% 
+  left_join((crmDat %>% select(-c(id_povCode, id_incLev)) %>% mutate(fromCRM = 1)), by = "id_actual") 
 
 sales_crm %>% dplyr::filter(is.na(fromCRM)) %>% 
   kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
@@ -227,6 +274,7 @@ Here we only find `5` observations that does not merge back with the Sales data.
 Since we have the Sales and CRM data captured in a single dataset called `sales_crm`, we can now remove the 2 original datasets.
 
 ```{r}
+sales_crm <- sales_crm %>% select(-c(ID_CRM, fromCRM))
 rm(salesDat, crmDat, tst)
 ```
 
@@ -296,7 +344,7 @@ We find that it does indeed uniquely define the dataset. As a final step we will
 
 ```{r}
 fin_sales_crm <- sales_crm %>% 
-  left_join((finDat %>% mutate(fromFIN = 1)), by = "id_actual") 
+  left_join((finDat %>% select(-id_specPay) %>% mutate(fromFIN = 1)), by = "id_actual") 
 
 fin_sales_crm %>% dplyr::filter(is.na(fromFIN)) %>% 
   kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
@@ -308,6 +356,7 @@ From this we find `5` observations that does not merge back with the Sales/CRM d
 We can clean up the workspace by removing the previous datasets no longer needed.
 
 ```{r}
+fin_sales_crm <- fin_sales_crm %>% select(-c(ID_FINANCE, fromFIN, id_actual))
 rm(finDat, sales_crm)
 ```
 
@@ -367,7 +416,84 @@ We will leave the twitter data separate from the other dataset for now, since it
 
 Due to the limited knowledge of the datasets we work with, we were forced to take some educated guesses. In reality, we would confirm our understanding of how the data are linked together and if our understanding of how the variables work and can be interpreted from the IT department and with other relevant stakeholders.
 
-# Exploratory Data Analysis (EDA)
+# Exploratory Data Analysis (EDA) {.tabset .tabset-fade}
+
+Now that we have our full dataset let's take a quick look at the data, how the variables relate to each other and to the target (a customer being retained or not).
+
+As a first step, we will correct the data types to properly reflect the fields. As we import all the data as character type (to avoid parsing issues), we will first define which variables are numeric, which are character and which are dates.
+
+Then we will remove variables from the dataset that aren't useful, for instance variables with a low level of variability between different levels.
+
+Finally we will inspect the remaining features to try and find interesting pattern that could be useful for the modelling phase. During this phase we will also modify the data, impute missing values and create new features.
+
+## Data Definition {.tabset .tabset-fade}
+
+In this section we will define the data according to what we believe it should be, i.e. numeric, character or date.
+
+```{r}
+fin_sales_crm %>% glimpse()
+```
+
+Here we can split the variables into the 3 groups and parse them to the correct class as can see from the summary above.
+
+## Date
+
+Let's consider the date class, the following are date variables :
+
+```{r}
+dateVars <- c(Departure_Date, Return_Date, Early_RPL, Latest_RPL, Initial_System_Date)
+```
+
+## Numeric
+
+Let's now consider the numeric class, the following are numeric variables :
+
+```{r}
+numVars <- c(From_Grade,    To_Grade, 
+             MDR_Low_Grade, MDR_High_Grade,
+             
+             Days, Cancelled_Pax, Total_Discount_Pax,
+             
+             FPP_to_School_enrollment, 
+             Total_School_Enrollment,
+             SPR_New_Existing,
+             
+             Retained)
+```
+
+## Character
+
+Finally we consider the character class, the following are character variables :
+
+```{r}
+charVars <- c(ID_SALES, Program_Code, Group_State, Travel_Type, SPR_Product_Type)
+```
+
+```{r}
+fin_sales_crm %>% propFunc(asDF = TRUE, vars = c("From_Grade", "To_Grade", "MDR_Low_Grade", "MDR_High_Grade"), totToReturn = 20)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

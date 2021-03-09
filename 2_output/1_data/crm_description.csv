@@ -1,0 +1,21 @@
+,column,dtype,nan,values,counts
+0,ID_CRM,object,0,['more than 50 values'],['']
+1,Poverty_Code,object,0,"['B', '0', 'C', 'A', 'D', 'E']","[1656, 1053, 881, 462, 67, 29]"
+2,Region,object,0,"['Other', 'Southern California', 'Northern California', 'Pacific Northwest', 'Dallas', 'Houston']","[1998, 785, 476, 342, 287, 260]"
+3,CRM_Segment,float64,4,"['min', 'max', 'med', 'mean']","[1.0, 12.0, 6.0, 6.909025096525096]"
+4,School_Type,object,0,"['PUBLIC', 'CHD', 'Catholic', 'Private non-Christian']","[3149, 456, 281, 262]"
+5,Parent_Meeting_Flag,int64,0,"['min', 'max', 'med', 'mean']","[0, 1, 1.0, 0.8563162970106075]"
+6,MDR_Low_Grade,object,0,"['6', 'K', 'PK', '7', '9', '5', '0', '4', '8', '3', '1', '10', '2']","[1521, 756, 694, 610, 180, 169, 116, 29, 27, 23, 14, 5, 4]"
+7,MDR_High_Grade,float64,116,"['min', 'max', 'med', 'mean']","[1.0, 12.0, 8.0, 8.391865079365079]"
+8,Total_School_Enrollment,int64,0,"['min', 'max', 'med', 'mean']","[0, 4005, 571.0, 622.8514946962391]"
+9,Income_Level,object,0,"['Q', 'O', 'P', 'L', 'M', 'I', 'J', 'N', 'K', 'F', 'G', 'H', 'E', 'C', '0', 'Z', 'D', 'B', 'A', 'P4', 'P1', 'P3', 'P5']","[506, 463, 356, 354, 332, 279, 270, 260, 221, 184, 162, 146, 138, 116, 104, 76, 71, 60, 37, 4, 4, 3, 2]"
+10,SPR_New_Existing,int64,0,"['min', 'max', 'med', 'mean']","[0, 1, 1.0, 0.5045805207328833]"
+11,NumberOfMeetingswithParents,int64,0,"['min', 'max', 'med', 'mean']","[0, 2, 1.0, 1.0990838958534233]"
+12,FirstMeeting,object,596,['more than 50 values'],['']
+13,LastMeeting,object,596,['more than 50 values'],['']
+14,DifferenceTraveltoFirstMeeting,float64,596,"['min', 'max', 'med', 'mean']","[-209.0, 752.0, 250.0, 262.1204954954955]"
+15,DifferenceTraveltoLastMeeting,float64,596,"['min', 'max', 'med', 'mean']","[-208.0, 759.0, 232.0, 228.78688063063063]"
+16,SchoolGradeTypeLow,object,0,"['Middle', 'Elementary', 'High', 'Undefined']","[3214, 464, 244, 226]"
+17,SchoolGradeTypeHigh,object,0,"['Middle', 'High', 'Elementary', 'Undefined']","[3060, 463, 356, 269]"
+18,SchoolGradeType,object,0,"['Middle->Middle', 'Elementary->Elementary', 'High->High', 'Undefined->Undefined', 'Middle->High', 'Elementary->Middle', 'Middle->Undefined', 'Elementary->High', 'Elementary->Undefined']","[2962, 356, 244, 226, 213, 98, 39, 6, 4]"
+19,SchoolSizeIndicator,object,159,"['S-M', 'L', 'M-L', 'S']","[1045, 1041, 1022, 881]"

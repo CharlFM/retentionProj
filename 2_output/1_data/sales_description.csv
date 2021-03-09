@@ -1,0 +1,25 @@
+,column,dtype,nan,values,counts
+0,ID_SALES,object,0,['more than 50 values'],['']
+1,Program_Code,object,0,"['HD', 'HC', 'HS', 'CD', 'HN', 'SK', 'HVP', 'SC', 'ST', 'HG', 'SM', 'SG', 'CC', 'IC', 'HO', 'HW', 'HZ', 'HY', 'HF', 'CN', 'HIS', 'SD', 'HX', 'HP', 'IK', 'HH', 'CVP', 'FN']","[2451, 491, 237, 196, 128, 125, 106, 76, 48, 46, 41, 34, 26, 23, 20, 15, 13, 13, 11, 8, 8, 6, 6, 6, 6, 6, 5, 2]"
+2,From_Grade,float64,226,"['min', 'max', 'med', 'mean']","[1.0, 14.0, 7.0, 7.283167812579578]"
+3,To_Grade,float64,269,"['min', 'max', 'med', 'mean']","[1.0, 14.0, 8.0, 7.923017507723996]"
+4,Group_State,object,0,['more than 50 values'],['']
+5,Days,int64,0,"['min', 'max', 'med', 'mean']","[1, 52, 15.0, 15.202504213821333]"
+6,Travel_Type,object,0,"['A', 'T', 'B']","[3504, 638, 11]"
+7,Departure_Date,object,0,['more than 50 values'],['']
+8,Return_Date,object,0,['more than 50 values'],['']
+9,Early_RPL,object,1168,['more than 50 values'],['']
+10,Latest_RPL,object,37,['more than 50 values'],['']
+11,Cancelled_Pax,int64,0,"['min', 'max', 'med', 'mean']","[0, 44, 4.0, 4.83457741391765]"
+12,Total_Discount_Pax,int64,0,"['min', 'max', 'med', 'mean']","[0, 53, 2.0, 2.9588249458222973]"
+13,Initial_System_Date,object,16,['more than 50 values'],['']
+14,SPR_Product_Type,object,0,"['East Coast', 'CA History', 'Science', 'Costa Rica', 'International', 'IL History']","[3467, 319, 254, 76, 29, 8]"
+15,FPP,int64,0,"['min', 'max', 'med', 'mean']","[2, 296, 23.0, 31.348904406453165]"
+16,Total_Pax,int64,0,"['min', 'max', 'med', 'mean']","[2, 320, 26.0, 34.42162292318805]"
+17,DepartureMonth,object,0,"['January', 'December']","[4137, 16]"
+18,GroupGradeTypeLow,object,0,"['Middle', 'K', 'PK', 'Elementary', 'High', 'Undefined']","[2161, 758, 694, 239, 185, 116]"
+19,GroupGradeTypeHigh,object,0,"['Middle', 'High', 'Elementary', 'Undefined']","[3111, 731, 195, 116]"
+20,GroupGradeType,object,0,"['Middle->Middle', 'K->Middle', 'PK->Middle', 'Middle->High', 'Elementary->Middle', 'PK->High', 'High->High', 'K->Elementary', 'Undefined->Undefined', 'K->High', 'PK->Elementary', 'Elementary->High', 'Elementary->Elementary']","[1905, 544, 452, 256, 210, 188, 185, 127, 116, 87, 54, 15, 14]"
+21,MajorProgramCode,object,0,"['H', 'S', 'C', 'I']","[3557, 330, 235, 31]"
+22,FPP_to_School_enrollment,object,159,['more than 50 values'],['']
+23,Retained,int64,0,"['min', 'max', 'med', 'mean']","[0, 1, 1.0, 0.6072718516734891]"

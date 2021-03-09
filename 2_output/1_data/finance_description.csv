@@ -1,0 +1,13 @@
+,column,dtype,nan,values,counts
+0,ID_FINANCE,object,0,['more than 50 values'],['']
+1,Deposit_Date,object,0,['more than 50 values'],['']
+2,Special_Pay,object,3322,"['FR', 'SA', 'CP', '0']","[515, 189, 121, 4]"
+3,Tuition,int64,0,"['min', 'max', 'med', 'mean']","[72, 4352, 1709.0, 1615.75909419417]"
+4,FRP_Active,int64,0,"['min', 'max', 'med', 'mean']","[0, 269, 12.0, 16.891110575764877]"
+5,FRP_Cancelled,int64,0,"['min', 'max', 'med', 'mean']","[0, 45, 2.0, 3.342327150084317]"
+6,FRP_Take_up_percent_,object,0,['more than 50 values'],['']
+7,EZ_Pay_Take_Up_Rate,object,0,['more than 50 values'],['']
+8,School_Sponsor,int64,0,"['min', 'max', 'med', 'mean']","[0, 1, 0.0, 0.11153938809925319]"
+9,SPR_Group_Revenue,int64,0,"['min', 'max', 'med', 'mean']","[73, 4610, 1706.0, 1611.2242833052276]"
+10,FPP_to_PAX,object,0,['more than 50 values'],['']
+11,Num_of_Non_FPP_PAX,int64,0,"['min', 'max', 'med', 'mean']","[0, 50, 2.0, 2.9677186220187908]"

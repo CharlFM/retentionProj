@@ -1,7 +1,6 @@
 # Ignore certain file types
 *.xlsx
 *.docx
-*.pptx
 *.xlsm
 *.csv
 *.xls

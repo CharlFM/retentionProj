@@ -1,7 +1,7 @@
 ---
 date: "`r Sys.Date()`"
 title: "Retention Project"
-author: "Charl Marais"
+author: "Group 2"
 output:
   rmdformats::material:
     self_contained: true
@@ -29,14 +29,28 @@ opts_knit$set(width = 75)
 
 # Introduction {.tabset .tabset-fade}
 
-# Setup and Loading Data
+# Setup and Loading Data {.tabset .tabset-fade}
 
 In this section we will load all the libraries needed to perform our analysis as well as the raw data we received.
 
 ```{r}
 options(scipen = 999)
+library(lubridate)
 library(dplyr)
 library(readr)
+library(plotly)
+library(cluster) 
+library(factoextra)
+library(FactoMineR)
+library(missMDA)
+library(caret)
+library(openxlsx)
+library(GGally)
+library(naniar)
+library(MLmetrics)
+library(gbm)
+
+day.abb <- c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 crmDat   <- readr::read_csv("0_data/crm_model.csv",     col_types = cols(.default = "c"))
 finDat   <- readr::read_csv("0_data/finance_model.csv", col_types = cols(.default = "c"))
@@ -46,6 +60,10 @@ twiter   <- readr::read_csv("0_data/twitter_model.csv", col_types = cols(.defaul
 <br>
 
 Here are the custom functions we define for the project.
+
+## propFunc
+
+This function describes the dataset by looking at the top `n` variables based on the proportion of each level present ranked from most common to least.
 
 ```{r}
 propFunc <- function(datIn, vars, totToReturn, asDF = TRUE) {
@@ -109,6 +127,495 @@ propFunc <- function(datIn, vars, totToReturn, asDF = TRUE) {
     }
     return(outpList)
 }
+```
+
+As an example we can look at the classic mtcars
+
+```{r}
+propFunc(datIn = mtcars, vars = names(mtcars), totToReturn = 3, asDF = TRUE) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
+```
+
+The first variable always shows the missing values in per variable (as shown per row). Then the second variable and from there on shows the levels as well as their proportions ranked from most frequent to least, hence for the variable (row) `cyl` we see that having $8$ cylinders is most common and it represents $43.75$% of all observations. Since we asked for only 3 variables to be returned (including NA, hence only 2) we see in the column `RestCount` that there is $1$ other level not shown. The column `Rest` is the proportion of other variables not shown, hence as we know there are a total of $3$ levels for the variable `cyl` and $1$ of them isn't shown, hence $33.3$% of the levels are not shown.
+
+This function allows us to very quickly get a deep insight in our data by identifying 2 main concerns :
+
+- How complete each variable is
+- Do we have variables with near zero variance
+
+## plotFreq
+
+This function is quite complex and rich in features. It allows us to plot any variable by it's levels showing the exposure of each level it will show the average of the specified `target`, in this case it is the retention rate. Finally it will show a horizontal line showing the overall portfolio average. We can also plot the predicted values if available.
+
+There are a number of additional parameters that will control the plots, such as whether the variable we are inspecting is numeric or not, if it is numeric we can specify the breaks as well which will result in a similar plot as a categorical variable. Finally we can `autoBin` the variables based on exposure and/or the variance of the target between the levels.
+
+```{r}
+plotTarget <- function(datIn, var_inspect, var_expo = NULL, target, numvar = TRUE, numVarBreaks = NULL, autoBin = TRUE, varStrength = 2, expoThreshold = 0.02, predVar = NULL, countVar = NULL) {
+  
+  if (is.null(var_expo)) {
+    datIn$exposureVar <- 1
+    var_expo <- "exposureVar"
+  }
+  
+  datIn[[target]] <- as.numeric(as.character(datIn[[target]]))
+  
+  if (numvar) {
+    if (!is.null(numVarBreaks)) {
+      datIn[[var_inspect]] <- cut(datIn[[var_inspect]], breaks = numVarBreaks) %>% as.character()
+    } else {
+      datIn[[var_inspect]] <- cut(datIn[[var_inspect]], breaks = 10) %>% as.character()
+    }
+  } 
+  
+  if (is.null(countVar)) {
+    
+    if (is.null(predVar)) {
+      stat_summary <- datIn %>% 
+      group_by(!!sym(var_inspect)) %>%
+      summarise(expo       = sum(!!sym(var_expo), na.rm = TRUE),
+                totTarget  = sum(!!sym(target), na.rm = T),
+                prop       = sum(!!sym(target), na.rm = T) / expo)
+    } else {
+      stat_summary <- datIn %>% 
+      group_by(!!sym(var_inspect)) %>%
+      summarise(expo       = sum(!!sym(var_expo), na.rm = TRUE),
+                totTarget  = sum(!!sym(target),   na.rm = T),
+                predClaims = sum(!!sym(predVar),  na.rm = T),
+                prop       = sum(!!sym(target),   na.rm = T) / expo,
+                predprop   = sum(!!sym(predVar),  na.rm = T) / expo)
+    }
+    
+  } else {
+    
+    if (is.null(predVar)) {
+      stat_summary <- datIn %>% 
+      group_by(!!sym(var_inspect)) %>%
+      summarise(expo       = sum(!!sym(var_expo),       na.rm = TRUE),
+                totTarget  = sum(!!sym(target), na.rm = T),
+                prop       = sum(!!sym(target), na.rm = T) / sum(!!sym(countVar), na.rm = T))
+    } else {
+      stat_summary <- datIn %>% 
+      group_by(!!sym(var_inspect)) %>%
+      summarise(expo       = sum(!!sym(var_expo),       na.rm = TRUE),
+                totTarget  = sum(!!sym(target), na.rm = T),
+                predClaims = sum(!!sym(predVar), na.rm = T),
+                prop       = sum(!!sym(target), na.rm = T) / sum(!!sym(countVar), na.rm = T),
+                predprop   = sum(!!sym(predVar), na.rm = T) / sum(!!sym(countVar), na.rm = T))
+    }
+    
+  }
+  
+  n <- sum(datIn[[var_expo]], na.rm = TRUE)
+  
+  meanprop <- sum(datIn[[target]], na.rm = TRUE) / n
+  varprop  <- sum((datIn[[target]] - meanprop)^2, na.rm = TRUE) / (n - 1)
+
+  stat_summary[[var_inspect]] <- as.character(stat_summary[[var_inspect]])
+  
+  if (numvar) {
+    ordr <- data.frame(uniqueVars = stat_summary[[var_inspect]]) %>% 
+      mutate(numversion = gsub(x = uniqueVars, pattern = "\\((.*),.*]", replacement = "\\1") %>% as.numeric()) %>% 
+      arrange(numversion)
+    
+    stat_summary[[var_inspect]][is.na(stat_summary[[var_inspect]])] <- -abs(min(ordr$uniqueVars) %>% as.character() %>% as.numeric()*1000)
+    stat_summary[[var_inspect]] <- factor(stat_summary[[var_inspect]], levels = ordr$uniqueVars)
+  } else {
+    stat_summary[[var_inspect]][is.na(stat_summary[[var_inspect]])] <- "NA"
+    stat_summary[[var_inspect]] <- factor(stat_summary[[var_inspect]], levels = unique(stat_summary[[var_inspect]]) %>% sort())
+  }
+  
+  if (autoBin) {
+    stat_summary[[var_inspect]] <- as.character(stat_summary[[var_inspect]])
+    stat_summary <- stat_summary %>% 
+      mutate(expoProp = expo/sum(expo, na.rm = TRUE),
+             other    = dplyr::if_else((prop >= meanprop + (varprop/varStrength) | prop <= meanprop - (varprop/varStrength)) &
+                                       (expoProp >= expoThreshold) , !!sym(var_inspect), "other")) %>% 
+      select(-expoProp)
+    stat_summary[[var_inspect]] <- stat_summary$other
+    stat_summary$other <- NULL
+    stat_summary <- stat_summary %>% 
+      group_by(!!sym(var_inspect)) %>%
+      summarise(expo      = sum(expo,      na.rm = TRUE),
+                totTarget = sum(totTarget, na.rm = T),
+                prop      = sum(totTarget, na.rm = T) / expo)
+  }
+  
+  if (is.null(predVar)) {
+    p <- stat_summary %>%
+      plotly::plot_ly() %>% 
+      plotly::add_markers(x = ~get(var_inspect), y = ~prop, name = paste0("Observed ", target), marker = list(color = 'maroon')) %>% 
+      plotly::add_lines(x = stat_summary[[var_inspect]], y = rep(meanprop, nrow(stat_summary)), name = paste0("Average ", target), line = list(color = 'maroon')) %>%
+      plotly::add_bars(x = ~get(var_inspect), y = ~expo, alpha = 0.7, yaxis = "y2", name = "Expo", marker = list(color = 'wheat'), opacity = 0.7) %>% 
+      plotly::layout(title = paste0("Observed ", target, " by ", var_inspect),
+                     xaxis  = list(title    = var_inspect,
+                                   zeroline = FALSE),
+                     yaxis  = list(title    = target,
+                                   zeroline = FALSE, 
+                                   showgrid = F),
+                     yaxis2 = list(zeroline   = FALSE,
+                                   showgrid   = F,
+                                   overlaying = "y",
+                                   side       = "right",
+                                   title      = "Exposure"))
+  } else {
+    p <- stat_summary %>%
+      plotly::plot_ly() %>% 
+      plotly::add_markers(x = ~get(var_inspect), y = ~prop, name = paste0("Observed ", target), marker = list(color = 'maroon')) %>% 
+      plotly::add_markers(x = ~get(var_inspect), y = ~predprop, name = paste0("Predicted ", target), marker = list(color = 'blue')) %>% 
+      plotly::add_lines(x = stat_summary[[var_inspect]], y = rep(meanprop, nrow(stat_summary)), name = paste0("Average ", target), line = list(color = 'maroon')) %>%
+      plotly::add_bars(x = ~get(var_inspect), y = ~expo, alpha = 0.7, yaxis = "y2", name = "Expo", marker = list(color = 'wheat'), opacity = 0.7) %>% 
+      plotly::layout(title = paste0("Observed and Predicted ", target, " by ", var_inspect),
+                     xaxis  = list(title    = var_inspect,
+                                   zeroline = FALSE),
+                     yaxis  = list(title    = target,
+                                   zeroline = FALSE, 
+                                   showgrid = F),
+                     yaxis2 = list(zeroline   = FALSE,
+                                   showgrid   = F,
+                                   overlaying = "y",
+                                   side       = "right",
+                                   title      = "Exposure"))
+  }
+  names(stat_summary)[names(stat_summary) == "totTarget"] <- paste0("tot_",  target)
+  names(stat_summary)[names(stat_summary) == "prop"]      <- paste0("ave_", target)
+  return(list(summary = stat_summary, plt = p, nonGroupedVars = stat_summary[[var_inspect]][stat_summary[[var_inspect]] != "other"]))
+}
+```
+
+Let's take a look at an example again
+```{r}
+plt <- plotTarget(datIn = mtcars, var_inspect = "cyl", target = "mpg", autoBin = FALSE, numvar = FALSE)
+plt$plt
+```
+
+## smartGrouper
+
+The `smartGrouper` function allows us to group levels of a single variable in a dataset to a reduced number. The function works with categorical variables only. The logic is as follows :
+
+1. We perform one-hot-encoding on the variable
+2. Perform MCA on the resulting dataframe
+3. Cluster the MCA Dimensions using k-means, 
+4. The optimal number of clusters is found using the silhouette method. We calculate the 95th quantile of the silhouette scores and choose the first `k` that is greater or equal to this hence resulting in the number of levels we will end with
+
+```{r}
+smartGrouper <- function(datIn, varIn, replaceVar = TRUE, newNames = FALSE, groupThresh = 0.05) {
+  
+  levsMax <- datIn[[varIn]] %>% unique() %>% length()
+
+  # Need to add imputation step here!
+  
+  set.seed(2020)
+  res <- FactoMineR::MCA(X = datIn %>% select(!!sym(varIn)) %>% mutate_all(.funs = as.character))
+  
+  mcaDims <- res$ind$coord %>% dplyr::as_tibble() 
+  
+  silhouette_score <- function(datIn, k) {
+    finRes <- c()
+    for (ii in k) {
+      set.seed(2021)
+      km <- kmeans(mcaDims, centers = ii, nstart = 25)
+      ss <- silhouette(km$cluster, dist(datIn))
+      res <- mean(ss[, 3])
+      finRes <- c(finRes, res)
+    }
+    return(finRes)
+  }
+  
+  siScores <- silhouette_score(datIn = mcaDims, k = 2:levsMax)
+  cc       <- which(siScores >= quantile(siScores, 0.95))[1]
+  set.seed(2022)
+  km       <- kmeans(mcaDims, centers = cc, nstart = 25)
+  
+  if (newNames) {
+    finClusts <- openxlsx::int2col(km$cluster)
+  } else {
+    finClusts <- data.frame(oldName = datIn[[varIn]], cluster = km$cluster, id = 1:nrow(datIn))
+    replacements <- finClusts %>% select(-id) %>% distinct() %>% group_by(cluster) %>% mutate(oldName = oldName %>% unique() %>% na.omit() %>% paste(collapse = "|")) %>% distinct(cluster, .keep_all = TRUE)
+    names(replacements) <- c(varIn, "cluster")
+    finClusts <- finClusts %>% select(-oldName) %>% left_join(replacements) %>% select(-cluster) %>% arrange(id) %>% select(-id)
+    finClusts <- finClusts[[1]]
+  }
+  
+  if (replaceVar) {
+    datIn[[varIn]] <- finClusts
+  } else {
+    varIn <- paste0(varIn, "_", "bis")
+    datIn[[varIn]] <- finClusts
+  }
+  
+  levs  <- datIn[[varIn]] %>% table() 
+  other <- names(levs)[levs < round(datIn %>% nrow() * groupThresh, 0)]
+  datIn[[varIn]][datIn[[varIn]] %in% other] <- "other"
+  
+  return(datIn)
+}
+```
+
+Let's take a look at an example, using the mtcars, but in this case we need to use a continuous variable (transforming it to categorical) :
+
+```{r echo = FALSE}
+result <- smartGrouper(datIn = mtcars %>% mutate(disp = as.character(disp)), varIn = "disp")
+result %>% kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%") 
+```
+
+There are two options for the function that will allow you to either overwrite the variable of interest or create a new one.
+
+
+```{r}
+rm(result)
+```
+
+## getSeason
+
+This function allows us to get the season from a date. 2012 is a good year to which to convert all of the dates; since it is a leap year, any February 29ths in your data set will be handled smoothly.
+
+```{r}
+getSeason <- function(dateIn) {
+    WS <- as.Date("2012-12-15", format = "%Y-%m-%d") # Winter Solstice
+    SE <- as.Date("2012-3-15",  format = "%Y-%m-%d") # Spring Equinox
+    SS <- as.Date("2012-6-15",  format = "%Y-%m-%d") # Summer Solstice
+    FE <- as.Date("2012-9-15",  format = "%Y-%m-%d") # Fall Equinox
+
+    # Convert dates from any year to 2012 dates
+    d <- as.Date(strftime(dateIn, format = "2012-%m-%d"))
+
+    ifelse (d >= WS | d < SE, "Winter",
+      ifelse (d >= SE & d < SS, "Spring",
+        ifelse (d >= SS & d < FE, "Summer", "Fall")))
+}
+```
+
+Let's take an example :
+
+```{r}
+getSeason(c(as.Date("2020-12-30", format = "%Y-%m-%d"), as.Date("2021-04-12", format = "%Y-%m-%d")))
+```
+
+# Twitter Data 
+
+```{python eval = FALSE}
+import pandas as pd
+
+df    = pd.read_csv("twitter_model.csv", index_col = 0)
+sales = pd.read_csv("sales_model.csv",   index_col = 0)
+
+df.reset_index(inplace = True)
+```
+
+## STOPWORDS - DELETE STOPWORDS
+
+```{python eval = FALSE}
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.corpus import stopwords
+import nltk
+from sklearn.feature_extraction import text 
+from sklearn.feature_extraction.text import CountVectorizer
+import re
+
+nltk.download('stopwords')
+nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
+nltk.download('wordnet')
+
+stop_words     = stopwords.words('english')
+stop_words2    = list(text.ENGLISH_STOP_WORDS)
+add_stop_words = ['amp'] # amp is a nosense frequent word
+
+for sw in (stop_words + stop_words2):
+    # Consider all the stopwords without "'". For example "cant" instead of "can't"
+    text = re.sub('\'', '', sw)
+    add_stop_words.append(text)
+
+stop_words = set(stop_words + stop_words2 + add_stop_words)
+```
+
+## CLEAN DATA
+
+```{python eval = FALSE}
+import re
+import string
+
+def clean_text_1(text):
+    # Lowercase
+    text = text.lower()
+    # Remove special text in brackets ([chorus],[guitar],etc)
+    text = re.sub('\[.*?\]', '', text)
+    # Remove punctuation
+    text = re.sub('[%s]' % re.escape(string.punctuation), '', text)
+    # Remove words containing numbers
+    text = re.sub('\w*\d\w*', '', text)   
+    # Remove quotes
+    text = re.sub('[‘’“”…]', '', text)
+    # Remove new line \n 
+    text = re.sub('\n', ' ', text)
+    # Remove stop_word
+    # stop_words = stopwords.words('english')
+    words = word_tokenize(text)
+    new_text = ""
+
+    for w in words:
+        if w not in stop_words and len(w) > 1:
+            new_text = new_text + " " + w
+
+    # Remove characters that are not letters or spaces
+    new_text = re.sub('[^A-Za-z\s]+', '', new_text) 
+
+    # Remove words with 1 char
+    new_text = re.sub('\b[A-Za-z]{1}\b', '', new_text) 
+
+    return new_text
+
+from sklearn.feature_extraction import text 
+from sklearn.feature_extraction.text import CountVectorizer
+from nltk.stem import PorterStemmer
+from nltk.stem import LancasterStemmer
+from nltk.stem import WordNetLemmatizer 
+from nltk import word_tokenize, pos_tag
+from nltk.stem import WordNetLemmatizer
+
+wnl = WordNetLemmatizer()
+
+data_clean = df.copy()
+data_clean['text'] = data_clean.text.apply(clean_text_1)
+data_clean
+```
+
+## LEMMATIZER
+
+```{python eval = FALSE}
+from nltk.stem import WordNetLemmatizer
+wnl = WordNetLemmatizer()
+
+def lemmatize_tag(text):
+    lemma=[]
+    for i,j in pos_tag(word_tokenize(text)) :
+        p=j[0].lower()
+        if p in ['j','n','v']:
+            if p == 'j':
+                p = 'a'
+            lemma.append(wnl.lemmatize(i,p))
+        else :
+            lemma.append(wnl.lemmatize(i))    
+    return ' '.join(lemma)
+
+# Apply lemmatizer
+data_clean_OK      = data_clean.copy()
+data_clean_OK.text = data_clean.text.apply(lemmatize_tag)
+```
+
+```{python eval = FALSE}
+from sklearn.feature_extraction.text import CountVectorizer
+# Recreate document-term matrix
+cv = CountVectorizer(stop_words=stop_words)
+data_cv = cv.fit_transform(data_clean_OK.text)
+data_stop = pd.DataFrame(data_cv.toarray(), columns=cv.get_feature_names())
+data_stop.index = data_clean_OK.index
+```
+
+```{python eval = FALSE}
+# Let's make some word clouds
+!conda config --append channels conda-forge
+from wordcloud import WordCloud, STOPWORDS
+import matplotlib.pyplot as plt
+wc = WordCloud(collocations = False, stopwords = stop_words, background_color = "white", colormap = "Dark2", max_font_size = 150, random_state = 42)
+```
+
+```{python eval = FALSE}
+# Reset the output dimensions
+import matplotlib.pyplot as plt
+
+plt.rcParams['figure.figsize'] = [20, 10]
+# Generate the word cloud
+wc.generate(' '.join((data_clean_OK.text.values)))
+
+# Display the word cloud
+plt.imshow(wc, interpolation = 'bilinear')
+plt.axis('off')
+plt.show()
+```
+
+```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("2_output/wordcloud.png")
+```
+
+## LSA
+
+```{python eval = FALSE}
+cv      = CountVectorizer(min_df = 1, max_df = 1, stop_words = stop_words)
+data_cv = cv.fit_transform(data_clean_OK.text)
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+
+vectorizer = TfidfVectorizer(stop_words = stop_words)
+tfidf      = vectorizer.fit_transform(data_clean_OK.text)
+data_tfidf = pd.DataFrame(tfidf.toarray(), columns = vectorizer.get_feature_names())
+data_tfidf.index = data_clean_OK.index
+data_tfidf
+
+from sklearn.decomposition import TruncatedSVD
+
+# SVD represent documents and terms in vectors 
+svd_model = TruncatedSVD(n_components = 30)
+
+svd_model.fit(data_tfidf)
+
+print(svd_model.components_.shape)
+print(svd_model.singular_values_)
+```
+
+## IDENTIFY TOPICS
+
+```{python eval = FALSE}
+terms = vectorizer.get_feature_names()
+
+for i, comp in enumerate(svd_model.components_):
+    terms_comp = zip(terms, comp)
+    sorted_terms = sorted(terms_comp, key= lambda x:x[1], reverse=True)[:7]
+    print("Topic "+str(i)+": ")
+    for t in sorted_terms:
+        print("%.2f*%s "% (t[1], t[0]) ,end='')
+    print("")
+```
+
+## APPLY VADER
+
+```{python eval = FALSE}
+import nltk
+nltk.download('vader_lexicon')
+
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+sid         = SentimentIntensityAnalyzer()
+vader_score = data_clean_OK['text'].apply(lambda text: sid.polarity_scores(text))
+```
+
+## DEFINE POLARITY/SUBJECTIVITY
+
+```{python eval = FALSE}
+from textblob import TextBlob
+pol = lambda x: TextBlob(x).sentiment.polarity
+sub = lambda x: TextBlob(x).sentiment.subjectivity
+data_clean_OK['polarity'] = data_clean_OK['text'].apply(pol)
+data_clean_OK['subjectivity'] = data_clean_OK['text'].apply(sub)
+```
+
+## DEFINE THRESHOLD FOR TOPICS
+
+```{python eval = FALSE}
+topic_array = svd_model.transform(data_tfidf)
+topic_array[topic_array >= 0.1] = 1
+topic_array[topic_array <  0.1] = 0
+n_topics = 10 
+columns_name = [f'TOPIC {i}' for i in range(n_topics)]
+df_topics = pd.DataFrame(topic_array[:,:n_topics], index = data_clean_OK.index, columns = columns_name)
+df_text_topics = data_clean_OK.merge(df_topics, left_index = True, right_index = True)
+
+# Merge between sales dataset and twitter dataset
+merge_sales = pd.merge(left = df_text_topics, right = sales.Retained, left_on = df_text_topics.ID_SALES, right_index = True)
+merge_sales.drop(columns = ['key_0'], inplace = True)
+
+# Save DB
+merge_sales.to_csv('2_output/1_data/twitter_results.csv', index = False)
 ```
 
 # Data Wrangling {.tabset .tabset-fade}
@@ -410,7 +917,44 @@ twiter %>% count(ID_SALES) %>% summary()
 
 From this we can see that we have either 3 or 4 tweets per customer (mostly 3). 
 
-We will leave the twitter data separate from the other dataset for now, since it would be better to first perform a sentiment analysis and then merge the result back so that we have our final dataset that we can perform an EDA on and furthermore proceed with the modelling as well.
+### Merge Data
+
+In this section we will merge the twitter data as processed earlier onto our current dataset.
+
+```{r}
+twiter <- readr::read_csv("2_output/1_data/twitter_results.csv") %>%
+  mutate(tweetLength = nchar(text)) %>% 
+  group_by(ID_SALES) %>% 
+  summarise(pol_min   = polarity %>% min(na.rm    = TRUE),
+            pol_mean  = polarity %>% mean(na.rm   = TRUE),
+            pol_med   = polarity %>% median(na.rm = TRUE),
+            pol_max   = polarity %>% max(na.rm    = TRUE),
+            sub_min   = subjectivity %>% min(na.rm    = TRUE),
+            sub_mean  = subjectivity %>% mean(na.rm   = TRUE),
+            sub_med   = subjectivity %>% median(na.rm = TRUE),
+            sub_max   = subjectivity %>% max(na.rm    = TRUE),
+            twl_min   = tweetLength %>% min(na.rm    = TRUE),
+            twl_mean  = tweetLength %>% mean(na.rm   = TRUE),
+            twl_med   = tweetLength %>% median(na.rm = TRUE),
+            twl_max   = tweetLength %>% max(na.rm    = TRUE),
+            numTweets = n(),
+            top_0     = `TOPIC 0` %>% sum(na.rm = TRUE),
+            top_1     = `TOPIC 1` %>% sum(na.rm = TRUE),
+            top_2     = `TOPIC 2` %>% sum(na.rm = TRUE),
+            top_3     = `TOPIC 3` %>% sum(na.rm = TRUE),
+            top_4     = `TOPIC 4` %>% sum(na.rm = TRUE),
+            top_5     = `TOPIC 5` %>% sum(na.rm = TRUE),
+            top_6     = `TOPIC 6` %>% sum(na.rm = TRUE),
+            top_7     = `TOPIC 7` %>% sum(na.rm = TRUE),
+            top_8     = `TOPIC 8` %>% sum(na.rm = TRUE),
+            top_9     = `TOPIC 9` %>% sum(na.rm = TRUE))
+
+finDat <- fin_sales_crm %>% 
+  left_join(twiter)
+
+rm(twiter, fin_sales_crm)
+```
+<br>
 
 ## Final Notes
 
@@ -420,92 +964,3355 @@ Due to the limited knowledge of the datasets we work with, we were forced to tak
 
 Now that we have our full dataset let's take a quick look at the data, how the variables relate to each other and to the target (a customer being retained or not).
 
-As a first step, we will correct the data types to properly reflect the fields. As we import all the data as character type (to avoid parsing issues), we will first define which variables are numeric, which are character and which are dates.
+In this section we will study the variables one-by-one to ensure that we have a clear and full understanding of how the data works.
 
-Then we will remove variables from the dataset that aren't useful, for instance variables with a low level of variability between different levels.
+## Global Overview
 
-Finally we will inspect the remaining features to try and find interesting pattern that could be useful for the modelling phase. During this phase we will also modify the data, impute missing values and create new features.
-
-## Data Definition {.tabset .tabset-fade}
-
-In this section we will define the data according to what we believe it should be, i.e. numeric, character or date.
+We will first take a quick global overview of what the data looks like :
 
 ```{r}
-fin_sales_crm %>% glimpse()
+finDat %>% glimpse()
 ```
 
-Here we can split the variables into the 3 groups and parse them to the correct class as can see from the summary above.
-
-## Date
-
-Let's consider the date class, the following are date variables :
+If we take a slightly deeper look at each variable using our custom function we find :
 
 ```{r}
-dateVars <- c(Departure_Date, Return_Date, Early_RPL, Latest_RPL, Initial_System_Date)
+propFunc(datIn = finDat, vars = names(finDat), totToReturn = 10, asDF = TRUE) %>% 
+  kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
 ```
 
-## Numeric
+What we can gather from the results above are that there are a few variables that could be ignored, for instance `DepartureMonth` as it is 99.61% of the time **January**, clearly this is a mistake in the raw data and we can correct this feature by extracting the correct Departure Month from the `Departure_Date`. We can also see that the date formate for the variables are `mm/dd/yyyy` and that there are numeric variables that should be correctly parsed by replacing the `,` with a `.`. There are a few other things we noticed, but will dive into them more in detail when we study each variable one at a time.
 
-Let's now consider the numeric class, the following are numeric variables :
+From this we also know that the variables can be split into 3 broad types :
+
+- Numeric
+- Categorical
+- Date
+
+We will correctly parse each variable, correct it and inspect it where needed next.
+
+## Variable Inspection {.tabset .tabset-fade}
+
+In this section we will go over each variable, explaining how what it means, how it relates to potential other variables and especially the target variable.
+
+The only variable we will not inspect is the `ID_SALES` variable, since it is simply the sales ID that uniquely identifies each observation.
+
+We did the same analysis for each variable, which might not be very exciting to review, however we highlighted the most interesting variables using a `*` at the end.
+
+### Program_Code *
+
+This is defined as the Program code of the trip. We know that it is a non-ordinal categorical variable and it doesn't have any missing values.
 
 ```{r}
-numVars <- c(From_Grade,    To_Grade, 
-             MDR_Low_Grade, MDR_High_Grade,
-             
-             Days, Cancelled_Pax, Total_Discount_Pax,
-             
-             FPP_to_School_enrollment, 
-             Total_School_Enrollment,
-             SPR_New_Existing,
-             
-             Retained)
+plt <- plotTarget(datIn = finDat, var_inspect = "Program_Code", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
 ```
+We can see from the plot above that the `Program_Code` seems to be important in terms of the retention.
 
-## Character
-
-Finally we consider the character class, the following are character variables :
+Clearly this variable has a lot of levels with low exposure, applying our `smartGrouper` function we find :
 
 ```{r}
-charVars <- c(ID_SALES, Program_Code, Group_State, Travel_Type, SPR_Product_Type)
+plt <- plotTarget(datIn = smartGrouper(datIn = finDat, varIn = "Program_Code"), var_inspect = "Program_Code", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Clearly this grouping seems a lot more reasonable that what we have observed before.
+
+##### Missing Values
+
+We can also consider how we should treat missing values, however in this case we know that we don't have any.
+
+#### Final Feature
+
+We know this to be a categorical feature and we simply wish to group the levels as shown before.
+
+```{r}
+finDat <- smartGrouper(datIn = finDat, varIn = "Program_Code")
+```
+
+### From_Grade
+
+Lowest grade in school of a participant. Hence, for the group of students who went on the trip this is the lowest grade.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "From_Grade", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `From_Grade` is lower than `To_Grade`.
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(From_Grade = as.numeric(From_Grade))
+```
+
+### To_Grade
+
+Highest grade in school of a participant. Hence, for the group of students who went on the trip this is the highest grade.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "To_Grade", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `From_Grade` is lower than `To_Grade`.
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(To_Grade = as.numeric(To_Grade))
+```
+
+### Group_State *
+
+This is the school location.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Group_State", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+As we can see the states are quite sparse. What we can do here is to group the states based on their location as **northern** or **southern** and **eastern** or **western** states.
+
+Here we define the grouping :
+
+```{r}
+stateGrouping <- tibble(Group_State = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
+                        Group_main_region = c("south", "west", "west", "south", "west", "west", "northeast", "south", "south", "south", "west", "west", "midwest", "midwest", "midwest", "midwest", "south", "south", "northeast", "south", "northeast", "midwest", "midwest", "midwest", "south", "midwest", "west", "midwest", "west", "northeast", "northeast", "west", "northeast", "northeast", "south", "midwest", "midwest", "south", "west", "northeast", "northeast", "south", "midwest", "south", "south", "west", "northeast", "south", "west", "south", "midwest", "west"))
+```
+
+Now we will merge these results back on to the original dataset and inspect the new features.
+
+```{r}
+finDat <- finDat %>% left_join(stateGrouping) 
+rm(stateGrouping)
 ```
 
 ```{r}
-fin_sales_crm %>% propFunc(asDF = TRUE, vars = c("From_Grade", "To_Grade", "MDR_Low_Grade", "MDR_High_Grade"), totToReturn = 20)
+plt <- plotTarget(datIn = finDat, var_inspect = "Group_main_region", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+There are 10 observations that could not be joined, let's briefly inspect these :
+
+```{r}
+finDat %>% filter(is.na(Group_main_region)) %>% pull(Group_State) %>% unique()
+```
+
+These states are foreign states, **Bermuda**, **Mexico**, **Puerto Rico** and **Alberta**. For these we can group them as **other**
+
+#### Final Feature
+
+Imputing the missing values and dropping the original variable.
+
+```{r}
+finDat <- finDat %>% 
+  mutate(Group_main_region = ifelse(is.na(Group_main_region), "other", Group_main_region)) %>% 
+  select(-Group_State)
+```
+
+### Days
+
+Number of days on the program. This should be equivalent to the trip duration and also the difference between the `Departure_Date` and the `Return_Date`.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Days", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(Days = as.numeric(Days))
+```
+
+```{r}
+((finDat$Return_Date %>% lubridate::mdy() - finDat$Departure_Date %>% lubridate::mdy()) %>% as.character() %>% as.numeric() - finDat$Days) %>% sum()
+```
+
+We can confirm that the calculation is consistent with the variable itself.
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Days", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(min(finDat$Days), max(finDat$Days), 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Days", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that shorter trips have a better retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### Travel_Type
+
+The travel mode (Air, Bus or Train).
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Travel_Type", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+As we can see, bus is so low that we can split it up as **Air** and **Ground**.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(Travel_Type = if_else(Travel_Type == "A", "air", "ground"))
+```
+
+### Departure_Date
+
+The departure date of the trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Departure_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The departure date could result in a number of interesting features :
+
+Month of departure
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::month(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season of departure
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = getSeason(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Here we can clearly see that the departure season definitely weighs on the retention.
+
+We could also consinder the departure day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::wday(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no clear reason to include the day of week.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We don't care as much about the date itself, but rather the departure month and season.
+
+```{r}
+finDat <- finDat %>%
+  mutate(departureMonth  = month.abb[lubridate::month(lubridate::mdy(Departure_Date))],
+         departureSeason = getSeason(lubridate::mdy(Departure_Date)))
+```
+
+### Return_Date
+
+The return date of the trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Return_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The return date could result in a number of interesting features :
+
+Month of return
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::month(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season of return
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = getSeason(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Here we can clearly see that the return month and season definitely weighs on the retention.
+
+We could also consider the return day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::wday(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no clear reason to include the day of week.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We don't care as much about the date itself, but rather the return month and season.
+
+```{r}
+finDat <- finDat %>%
+  mutate(returnMonth  = month.abb[lubridate::month(lubridate::mdy(Return_Date))],
+         returnSeason = getSeason(lubridate::mdy(Return_Date))) %>%
+  select(-Return_Date)
+```
+
+### Early_RPL
+
+The first communication to invite people to join the trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Early_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = lubridate::month(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = getSeason(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There are no clear signal so far.
+
+We could also consider the return day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = lubridate::wday(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The only signal we can detect is that the missing values are much lower than the rest.
+
+#### Missing Values
+
+Create a category of the missing values.
+
+#### Final Feature
+
+We don't care as much about the date itself and we saw the missing values carry some weight.
+
+```{r}
+finDat <- finDat %>%
+  mutate(earlyRPLFlag = dplyr::if_else(is.na(Early_RPL), "no_notification", "notified")) %>%
+  select(-Early_RPL)
+```
+
+### Latest_RPL
+
+The last communication to invite people to join the trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Latest_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::month(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = getSeason(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There are no clear signal so far.
+
+We could also consider the return day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::wday(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The only signal we can detect is that the missing values are much lower than the rest.
+
+#### Missing Values
+
+Create a category of the missing values.
+
+#### Final Feature
+
+We don't care as much about the date itself and we saw the missing values carry some weight.
+
+```{r}
+finDat <- finDat %>%
+  mutate(latestRPLFlag = dplyr::if_else(is.na(Latest_RPL), "no_notification", "notified")) %>%
+  select(-Latest_RPL)
 ```
 
 
+### Cancelled_Pax
+
+The number of passengers who made a deposit and cancelled.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Cancelled_Pax", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(Cancelled_Pax = as.numeric(Cancelled_Pax))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Cancelled_Pax", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(min(finDat$Cancelled_Pax), max(finDat$Cancelled_Pax), 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Cancelled_Pax", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that the more passengers cancel, the more likely it is that they will be retained.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### Total_Discount_Pax
+
+The number of extra passengers (e.g. professors).
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Discount_Pax", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(Total_Discount_Pax = as.numeric(Total_Discount_Pax))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Discount_Pax", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(min(finDat$Total_Discount_Pax), max(finDat$Total_Discount_Pax), 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Discount_Pax", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that the more extra passengers, the more likely it is that they will be retained.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### Initial_System_Date
+
+The first date when trip was organized.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Initial_System_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = lubridate::month(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = getSeason(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Here we can clearly see that the season definitely weighs on the retention.
+
+We could also consider the day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = lubridate::wday(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that as the `Initial_System_Date` increase (from Monday to Sunday) then the retention reduces.
+
+#### Missing Values
+
+There are some missing values, we apply MCA to perform the imputation at the end.
+
+#### Final Feature
+
+We don't care as much about the date itself, but rather the season and the day of the week.
+
+```{r}
+finDat <- finDat %>%
+  mutate(initDayOfWeek = day.abb[lubridate::month(lubridate::mdy(Initial_System_Date))],
+         initSeason    = getSeason(lubridate::mdy(Initial_System_Date))) %>%
+  select(-Initial_System_Date)
+```
+
+### SPR_Product_Type
+
+Aggregation of tour types.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Product_Type", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+Here we can see that 3 of the categories are extremely infrequent. We will group these.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(SPR_Product_Type = if_else(SPR_Product_Type %in% c("International", "IL History", "Costa Rica"), "other", SPR_Product_Type)), var_inspect = "SPR_Product_Type", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+We can also consider how we should treat missing values, however in this case we know that we don't have any.
+
+#### Final Feature
+
+We know this to be a categorical feature and we simply wish to group the levels as shown before.
+
+```{r}
+finDat <- finDat %>% mutate(SPR_Product_Type = if_else(SPR_Product_Type %in% c("CA History", "East Coast", "Science"), SPR_Product_Type, "other"))
+```
+
+### FPP
+
+The number of Full payment passengers.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(FPP = as.numeric(FPP))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(min(finDat$FPP), max(finDat$FPP), 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that the more full payment passengers we have, the more likely it is that they will be retained.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### Total_Pax *
+
+The Total number of passengers (including the extra passengers).
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Pax", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(Total_Pax = as.numeric(Total_Pax))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Pax", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(min(finDat$Total_Pax), max(finDat$Total_Pax), 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_Pax", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that the more passengers we have, the more likely it is that they will be retained.
+
+What we also know is that we can calculate this from the individual components :
+
+$$Total_Pax = FPP + Total_Discount_Pax$$
+
+```{r}
+((finDat$FPP + finDat$Total_Discount_Pax - finDat$Total_Pax)/finDat$Total_Pax) %>% summary()
+```
+
+These numbers show that there can be very large differences between the two different calculation methods. Let's take a look at the distribution of the calculated.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(totPax_Diff = FPP + Total_Discount_Pax - Total_Pax), var_inspect = "totPax_Diff", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-1000, 1000, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Clearly we can see an odd **V** shape that occurs when we plot the difference between the calculated total number of passangers and the provided number. We will add this difference as a feature to the model.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric) and add the difference as mentioned before.
+
+```{r}
+finDat <- finDat %>% mutate(totPaxDiff = FPP + Total_Discount_Pax - Total_Pax)
+```
+
+### DepartureMonth
+
+Month of departure.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DepartureMonth", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+This variable is clearly an error, so we will discard it. Additionally, we have already calculated the departure month from the actual date.
+
+#### Final Feature
+
+We will discard this feature
+
+```{r}
+finDat <- finDat %>% select(-DepartureMonth)
+```
+
+### GroupGradeTypeLow
+
+This is the lowest grade type in the entire trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "GroupGradeTypeLow", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+Create a common missing indicator
+
+```{r}
+finDat <- finDat %>% mutate(GroupGradeTypeLow = ifelse(GroupGradeTypeLow %in% c(NA, "NA", "Undefined"), NA, GroupGradeTypeLow))
+```
+
+### GroupGradeTypeHigh
+
+This is the highest grade type in the entire trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "GroupGradeTypeHigh", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+Will be imputed via MCA
+
+#### Final Feature
+
+Create a common missing indicator
+
+```{r}
+finDat <- finDat %>% mutate(GroupGradeTypeHigh = ifelse(GroupGradeTypeHigh %in% c(NA, "NA", "Undefined"), NA, GroupGradeTypeHigh))
+```
+
+### GroupGradeType
+
+This is the combination of the lowest and highest grade type in the entire trip.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "GroupGradeType", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable. There are some levels with very low exposure, so we might consider grouping these, but for now we can leave it as is.
+
+We could also consider ignoring this variable as it is a combination of 2 existing variables, this interaction should be detected by tree-based models.
+
+#### Missing Values
+
+Will be imputed from the previous imputed values, after they are imputed.
+
+#### Final Feature
+
+Nothing to do
+
+### MajorProgramCode
+
+This is an aggregation of program codes.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "MajorProgramCode", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Nothing to do here.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+Nothing to do
+
+### Retained
+
+This is the target variable, this indicates whether the customer was retained or not.
+
+```{r}
+finDat$Retained %>% table(useNA = "always") %>% prop.table()
+```
+
+Here we can see that 61% of all customers are retained. This is good news, since it means that dataset is well-balanced. A naive model will have a prediction accuracy of 61%, giving us a very rough bencmark of what to beat.
+
+```{r}
+finDat$Retained %>% class()
+```
+
+We also see that this variable is a **character** type. Depending on the type of model we want to build the class might need to change to numeric, for now we don't need to do anything.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will add another feature as `yes` and `no`. Care will be taken not to include these as part of the feature space.
+
+```{r}
+finDat <- finDat %>% mutate(Retained_class = if_else(Retained == 0, "no", "yes"))
+```
+
+### Poverty_Code
+
+The poverty code for the school area based on estimated percentage below the poverty line. A is 0 to 5.9, B is 6 to 15.9, C is 16 to 30.9, D is 31 or more. E is unclassified, Space if DISTCLASS = U (Supervisory Union)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Poverty_Code", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+As we can see there are some other levels we wouldn't normally expect. These include `0` and `NA`. Let's group these along with `E` as `other`
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Poverty_Code = ifelse(Poverty_Code %in% c("A", "B", "C", "D"), Poverty_Code, "other")), var_inspect = "Poverty_Code", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+There are a large amount of missing data categorised as **other**.
+
+#### Final Feature
+
+We will group all the **other** categories as **other**
+
+```{r}
+finDat <- finDat %>% mutate(Poverty_Code = ifelse(Poverty_Code %in% c("A", "B", "C", "D"), Poverty_Code, "other"))
+```
+
+### Region
+
+State areas
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Region", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+
+#### Missing Values
+
+We will group these with the level **other**.
+
+#### Final Feature
+
+We will group all the **other** categories as **other**
+
+```{r}
+finDat <- finDat %>% mutate(Region = ifelse(Region %in% c("Southern California", "Northern California", "Pacific Northwest", "Houston", "Dallas"), Region, "other"))
+```
+
+### CRM_Segment
+
+CRM code segment (internal code)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "CRM_Segment", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The code seem to be numeric. Let's see what a numeric conversion will yield.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(CRM_Segment = CRM_Segment %>% as.numeric()), var_inspect = "CRM_Segment", target = "Retained",
+                  numvar = T, numVarBreaks = seq(0, 20, 1),
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt <- plotTarget(datIn = smartGrouper(datIn = finDat, varIn = "CRM_Segment"), var_inspect = "CRM_Segment", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no logical pattern here, no proof that this code should be considered as a numeric variable. The simplest solution in this case is to group low exposure and missing observations as **other**.
+
+#### Missing Values
+
+We will group these with the low exposure levels as **other**.
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(CRM_Segment = ifelse(CRM_Segment %in% c("1", "2", "4", "5", "6", "7", "8", "9", "10", "11"), CRM_Segment, "other"))
+```
+
+### School_Type
+
+Public or Private school
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "School_Type", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do here.
+
+#### Missing Values
+
+We will perform the missing value imputation using an MCA technique.
+
+#### Final Feature
+
+No need for any engineering.
+
+### Parent_Meeting_Flag
+
+Indicate whether a parent meeting was held.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Parent_Meeting_Flag", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do here.
+
+#### Missing Values
+
+We will perform the missing value imputation using an MCA technique.
+
+#### Final Feature
+
+No need for any engineering.
+
+### MDR_Low_Grade
+
+Lowest grade in the entire school (not just the participants)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "MDR_Low_Grade", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The grades **K** and **PK** are Kindergarden and Pre-Kindergarden. We can transform these to -1 and -2 and convert the variable to a numeric type.
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `MDR_Low_Grade` is lower than `MDR_High_Grade`.
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% 
+  mutate(MDR_Low_Grade = ifelse(MDR_Low_Grade == "K",  "-1", MDR_Low_Grade),
+         MDR_Low_Grade = ifelse(MDR_Low_Grade == "PK", "-2", MDR_Low_Grade) %>% as.numeric())
+```
+
+### MDR_High_Grade
+
+Highest grade in the entire school (not just the participants)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "MDR_High_Grade", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The grades **K** and **PK** are Kindergarden and Pre-Kindergarden. We can transform these to -1 and -2 and convert the variable to a numeric type.
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `MDR_Low_Grade` is lower than `MDR_High_Grade`.
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% 
+  mutate(MDR_High_Grade = ifelse(MDR_High_Grade == "K",  "-1", MDR_High_Grade),
+         MDR_High_Grade = ifelse(MDR_High_Grade == "PK", "-2", MDR_High_Grade) %>% as.numeric())
+```
+
+### Total_School_Enrollment
+
+School Enrolments
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_School_Enrollment", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(Total_School_Enrollment = as.numeric(Total_School_Enrollment))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_School_Enrollment", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 3000, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Total_School_Enrollment", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that there exists some pattern between the school enrolment and the retention.
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### FPP_to_School_enrollment
+
+The ratio of FPP to School Enrolments
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_School_enrollment", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(FPP_to_School_enrollment = gsub(FPP_to_School_enrollment, pattern = ",", replacement = ".") %>% as.numeric())
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_School_enrollment", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 0.23, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_School_enrollment", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that there exists some pattern between the school enrolment and the retention.
+
+```{r}
+((finDat$FPP/finDat$Total_School_Enrollment-finDat$FPP_to_School_enrollment)/finDat$FPP_to_School_enrollment) %>% summary()
+```
+
+There are a large number of missing observations, these are due to the calculated variable `FPP_to_School_enrollment`. We can impute them using the calculated, but first let's compare the differences.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(FPP_to_School_enrollment_Diff = FPP/Total_School_Enrollment - FPP_to_School_enrollment), var_inspect = "FPP_to_School_enrollment_Diff", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-5, 5, 0.0025)),
+                  autoBin = F)
+plt$plt
+```
+
+The difference is quite noisy this time, suggesting little evidence to include it this time. 
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
+
+#### Final Feature
+
+We will leave the feature as is (numeric) but impute the missing values from the calculated values.
+
+```{r}
+finDat <- finDat %>% mutate(FPP_to_School_enrollment = if_else(is.na(FPP_to_School_enrollment) & Total_School_Enrollment > 0 & !is.na(Total_School_Enrollment), FPP/Total_School_Enrollment, FPP_to_School_enrollment))
+```
+
+### Income_Level
+
+Parent income level code. A is the lowest, Q is the highest and Z is unclassified.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+We can see multiple missing value types, `0`, `NA` and `Z` should all be classed as `other`. We will also group `P` with `P1`, `P3`, `P4` and `P5`.
+
+```{r}
+finDat <- finDat %>% mutate(Income_Level = ifelse(Income_Level %in% c("P", "P1", "P3", "P4", "P5"), "P", Income_Level),
+                            Income_Level = ifelse(Income_Level %in% c("0", "NA", NA, "Z"), "other", Income_Level))
+```
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+None, all the missing values are already taken into account and grouped as `other`.
+
+#### Final Feature
+
+No further engineering needed.
+
+### SPR_New_Existing
+
+New client indicator
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SPR_New_Existing", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do here.
+
+#### Missing Values
+
+We will perform the missing value imputation using an MCA technique.
+
+#### Final Feature
+
+No need for any engineering.
+
+### NumberOfMeetingswithParents 
+
+Number of meetings held with parents before the trip
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "NumberOfMeetingswithParents", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(NumberOfMeetingswithParents = as.numeric(NumberOfMeetingswithParents))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "NumberOfMeetingswithParents", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-1, 5, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+It seems that the more meetings had, the less likely it is that they will be retained.
+
+#### Missing Values
+
+Will be imputed by PCA
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### FirstMeeting
+
+Date of the first meeting (NA if none were held)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FirstMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month 
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::month(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = getSeason(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no clear evidence of any relationship with retention thus far.
+
+We could also consider the departure day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::wday(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no clear reason to include the day of week.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We don't see any reason to include the variable.
+
+```{r}
+finDat <- finDat %>% select(-FirstMeeting)
+```
+
+### LastMeeting
+
+Date of the first meeting (NA if none were held)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "LastMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month 
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::month(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = getSeason(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that there might be a relationship between the last meeting season and the retention.
+
+We could also consider the departure day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::wday(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We can also see that the day of week have a relationship with the retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We don't see any reason to include the variable.
+
+```{r}
+finDat <- finDat %>%
+  mutate(LastMeetingSeason  = getSeason(lubridate::mdy(LastMeeting)),
+         LastMeetingWeekDay = lubridate::wday(lubridate::mdy(LastMeeting)) %>% as.character(),
+         LastMeetingWeekDay = ifelse(is.na(LastMeetingWeekDay), "other", LastMeetingWeekDay)) %>%
+  select(-LastMeeting)
+```
+
+### DifferenceTraveltoFirstMeeting
+
+Days from the first parent meeting to the travel date.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoFirstMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(DifferenceTraveltoFirstMeeting = as.numeric(DifferenceTraveltoFirstMeeting))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoFirstMeeting", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-1000, 1000, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoFirstMeeting", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that the bigger difference the less likely the retention
+
+#### Missing Values
+
+No imputation.
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### DifferenceTraveltoLastMeeting
+
+Days from the last parent meeting to the travel date.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoLastMeeting", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(DifferenceTraveltoLastMeeting = as.numeric(DifferenceTraveltoLastMeeting))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoLastMeeting", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-1000, 1000, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "DifferenceTraveltoLastMeeting", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that the bigger difference the less likely the retention
+
+#### Missing Values
+
+No imputation.
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### SchoolGradeTypeLow
+
+This is the lowest grade type in the school.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SchoolGradeTypeLow", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+The missing values will be imputed using MCA. 
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(SchoolGradeTypeLow = ifelse(SchoolGradeTypeLow %in% c(NA, "NA", "Undefined"), NA, SchoolGradeTypeLow))
+```
+
+### SchoolGradeTypeHigh
+
+This is the highest grade type in the school.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SchoolGradeTypeHigh", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+The missing values will be imputed using MCA. 
+
+#### Final Feature
+
+```{r}
+finDat <- finDat %>% mutate(SchoolGradeTypeHigh = ifelse(SchoolGradeTypeHigh %in% c(NA, "NA", "Undefined"), NA, SchoolGradeTypeHigh))
+```
+
+### SchoolGradeType
+
+This is the combination of the low and highest grade type in the school.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SchoolGradeType", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+The missing values will be a combination of the imputed results from before. 
+
+#### Final Feature
+
+Nothing to do
+
+### SchoolSizeIndicator
+
+Size of the school (S, M, L, S-M, M-L)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SchoolSizeIndicator", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do with this variable.
+
+#### Missing Values
+
+The missing values will be a combination of the imputed using MCA. 
+
+#### Final Feature
+
+Nothing to do
+
+### Deposit_Date
+
+The expected deposit date.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Deposit_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+The date could result in a number of interesting features :
+
+Month
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::month(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Season
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = getSeason(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+No evidence exists that it weighs on the retention.
+
+We could also consider the day of the week :
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::wday(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is no clear reason to include the day of week.
+
+The final variable of interest could be the time between the deposit date and the trip start date
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(dD_to_travD = (lubridate::mdy(Departure_Date)-lubridate::mdy(Deposit_Date)) %>% as.character() %>% as.numeric()), var_inspect = "dD_to_travD", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some decreasing trend.
+
+#### Missing Values
+
+We will impute the missing values using PCA.
+
+#### Final Feature
+
+We don't care as much about the date itself, rather the time difference between the deposit date and the travel date.
+
+```{r}
+finDat <- finDat %>%
+  mutate(depositToDeparture = (lubridate::mdy(Departure_Date)-lubridate::mdy(Deposit_Date)) %>% as.character() %>% as.numeric()) %>%
+  select(-c(Deposit_Date, Departure_Date))
+```
+
+### Special_Pay
+
+This is the payment level, it is an internal code.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Special_Pay", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We can see that there are both `NA` and `0` as missing values, we will group these as `other`.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(Special_Pay = ifelse(Special_Pay %in% c("CP", "FR", "SA"), Special_Pay, "other")), var_inspect = "Special_Pay", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Clearly this grouping seems a lot more reasonable that what we have observed before.
+
+#### Missing Values
+
+None.
+
+#### Final Feature
+
+Nothing other than the grouping as mentioned before.
+
+```{r}
+finDat <- finDat %>% mutate(Special_Pay = ifelse(Special_Pay %in% c("CP", "FR", "SA"), Special_Pay, "other"))
+```
+
+### Tuition
+
+Price per full-payment participant (FPP)
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Tuition", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(Tuition = as.numeric(Tuition))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Tuition", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-100, 10000, 1),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Tuition", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that less tuition have a better retention.
+
+#### Missing Values
+
+PCA for imputation
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### FRP_Active
+
+Number of FPPs who bought the trip-cancellation insurance.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Active", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(FRP_Active = as.numeric(FRP_Active))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Active", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-100, 10000, 1),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Active", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that the more people buying the insurance the more likely it is they are retained.
+
+#### Missing Values
+
+PCA for imputation
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+
+### FRP_Cancelled
+
+Number of FPPs who bought the trip-cancellation insurance and cancelled it
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Cancelled", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(FRP_Cancelled = as.numeric(FRP_Cancelled))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Cancelled", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-100, 10000, 1),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Cancelled", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that the more people buying the insurance the more likely it is they are retained.
+
+#### Missing Values
+
+PCA for imputation
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### FRP_Take_up_percent_
+
+The number of FPPs who bought the insurance and pay for it.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Take_up_percent_", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(FRP_Take_up_percent_ = gsub(FRP_Take_up_percent_, pattern = ",", replacement = ".") %>% as.numeric())
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Take_up_percent_", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 1.2, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FRP_Take_up_percent_", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
+
+#### Final Feature
+
+We will leave the feature as is (numeric) but impute the missing values from the calculated values.
+
+### EZ_Pay_Take_Up_Rate
+
+The number of FPPs who use an automatic bank draft.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "EZ_Pay_Take_Up_Rate", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(EZ_Pay_Take_Up_Rate = gsub(EZ_Pay_Take_Up_Rate, pattern = ",", replacement = ".") %>% as.numeric())
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "EZ_Pay_Take_Up_Rate", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 1.2, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "EZ_Pay_Take_Up_Rate", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
+
+#### Final Feature
+
+We will leave the feature as is (numeric) but impute the missing values from the calculated values.
+
+### School_Sponsor
+
+Indicator whether the school is sponsoring the trip or not
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "School_Sponsor", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+There is nothing we need to do here.
+
+#### Missing Values
+
+We will perform the missing value imputation using an MCA technique.
+
+#### Final Feature
+
+No need for any engineering.
+
+### SPR_Group_Revenue
+
+Amount paid for all participants.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Group_Revenue", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(SPR_Group_Revenue = as.numeric(SPR_Group_Revenue))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Group_Revenue", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-100, 10000, 1),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Group_Revenue", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some indication that less total revenue have a better retention.
+
+#### Missing Values
+
+PCA for imputation
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### FPP_to_PAX
+
+Percentage of FPP.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_PAX", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable :
+
+```{r}
+finDat <- finDat %>% mutate(FPP_to_PAX = gsub(FPP_to_PAX, pattern = ",", replacement = ".") %>% as.numeric())
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_PAX", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 1, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "FPP_to_PAX", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+It seems that there exists some pattern between the this ratio and the retention.
+
+```{r}
+((finDat$FPP/finDat$Total_Pax - finDat$FPP_to_PAX)/finDat$FPP_to_PAX) %>% summary()
+```
+
+There are a large some missing observations, these are due to the calculated variable `FPP_to_PAX`. We can impute them using the calculated, but first let's compare the differences.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(FPP_to_PAX = FPP/Total_Pax - FPP_to_PAX), var_inspect = "FPP_to_PAX", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-5, 5, 0.0025)),
+                  autoBin = F)
+plt$plt
+```
+
+The difference is quite noisy this time, suggesting little evidence to include it this time. 
+
+#### Missing Values
+
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
+
+#### Final Feature
+
+We will leave the feature as is (numeric) but impute the missing values from the calculated values.
+
+```{r}
+finDat <- finDat %>% mutate(FPP_to_PAX = if_else(is.na(FPP_to_PAX) & Total_Pax > 0 & !is.na(Total_Pax), FPP/Total_Pax, FPP_to_PAX))
+```
+
+### Num_of_Non_FPP_PAX
+
+Number of non-FPP participants.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Num_of_Non_FPP_PAX", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(Num_of_Non_FPP_PAX = as.numeric(Num_of_Non_FPP_PAX))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Num_of_Non_FPP_PAX", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(0, 100, 1)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Num_of_Non_FPP_PAX", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### pol_min
+
+This is the minimum polarity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(pol_min = as.numeric(pol_min),
+                            pol_min = ifelse(is.na(pol_min), 0, pol_min))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### pol_mean
+
+This is the average polarity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(pol_mean = as.numeric(pol_mean),
+                            pol_mean = ifelse(is.na(pol_mean), 0, pol_mean))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### pol_med
+
+This is the median polarity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_med", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(pol_med = as.numeric(pol_med),
+                            pol_med = ifelse(is.na(pol_med), 0, pol_med))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_med", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_med", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### pol_max
+
+This is the maximum polarity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(pol_max = as.numeric(pol_max),
+                            pol_max = ifelse(is.na(pol_max), 0, pol_max))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### sub_min
+
+This is the minimum subjectivity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(sub_min = as.numeric(sub_min),
+                            sub_min = ifelse(is.na(sub_min), 0, sub_min))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### sub_mean
+
+This is the average subjectivity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(sub_mean = as.numeric(sub_mean),
+                            sub_mean = ifelse(is.na(sub_mean), 0, sub_mean))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### sub_med
+
+This is the median subjectivity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_med", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(sub_med = as.numeric(sub_med),
+                            sub_med = ifelse(is.na(sub_med), 0, sub_med))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_med", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_med", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### sub_max
+
+This is the maximum subjectivity of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(sub_max = as.numeric(sub_max),
+                            sub_max = ifelse(is.na(sub_max), 0, sub_max))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### twl_min
+
+This is the minimum tweet length of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(twl_min = as.numeric(twl_min),
+                            twl_min = ifelse(is.na(twl_min), 0, twl_min))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### twl_mean
+
+This is the average tweet length of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(twl_mean = as.numeric(twl_mean),
+                            twl_mean = ifelse(is.na(twl_mean), 0, twl_mean))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### twl_med
+
+This is the median tweet length of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_med", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(twl_med = as.numeric(twl_med),
+                            twl_med = ifelse(is.na(twl_med), 0, twl_med))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_med", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_med", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### twl_max
+
+This is the maximum tweet length of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(twl_max = as.numeric(twl_max),
+                            twl_max = ifelse(is.na(twl_max), 0, twl_max))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 150, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+Or grouped :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### numTweets
+
+This is the number of tweets posted of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "numTweets", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(numTweets = as.numeric(numTweets),
+                            numTweets = ifelse(is.na(numTweets), 0, numTweets))
+```
+
+Plotting the variable again as numeric, we find :
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "numTweets", target = "Retained",
+                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
+                  autoBin = F)
+plt$plt
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### top_0
+
+This is the number of times topic 0 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_0", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_0 = as.numeric(top_0),
+                            top_0 = ifelse(is.na(top_0), 0, top_0))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### top_1
+
+This is the number of times topic 1 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_1", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_1 = as.numeric(top_1),
+                            top_1 = ifelse(is.na(top_1), 0, top_1))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
 
 
 
+### top_2
+
+This is the number of times topic 2 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_2", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_2 = as.numeric(top_2),
+                            top_2 = ifelse(is.na(top_2), 0, top_2))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### top_3
+
+This is the number of times topic 3 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_3", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_3 = as.numeric(top_3),
+                            top_3 = ifelse(is.na(top_3), 0, top_3))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
 
 
+### top_4
 
+This is the number of times topic 4 was tweeted about of all the tweets from this individual.
 
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_4", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
 
+We know this is a numeric variable and we can check the consistency on how it was calculated :
 
+```{r}
+finDat <- finDat %>% mutate(top_4 = as.numeric(top_4),
+                            top_4 = ifelse(is.na(top_4), 0, top_4))
+```
 
+There seems to be some relationship with retention.
 
+#### Missing Values
 
+None
 
+#### Final Feature
 
+We will leave the feature as is (numeric)
+### top_5
 
+This is the number of times topic 5 was tweeted about of all the tweets from this individual.
 
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_5", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
 
+We know this is a numeric variable and we can check the consistency on how it was calculated :
 
+```{r}
+finDat <- finDat %>% mutate(top_5 = as.numeric(top_5),
+                            top_5 = ifelse(is.na(top_5), 0, top_5))
+```
 
+There seems to be some relationship with retention.
 
+#### Missing Values
 
+None
 
+#### Final Feature
 
+We will leave the feature as is (numeric)
 
+### top_6
 
+This is the number of times topic 6 was tweeted about of all the tweets from this individual.
 
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_6", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
 
+We know this is a numeric variable and we can check the consistency on how it was calculated :
 
+```{r}
+finDat <- finDat %>% mutate(top_6 = as.numeric(top_6),
+                            top_6 = ifelse(is.na(top_6), 0, top_6))
+```
 
+There seems to be some relationship with retention.
 
+#### Missing Values
 
+None
 
+#### Final Feature
 
+We will leave the feature as is (numeric)
 
+### top_7
 
+This is the number of times topic 7 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_7", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_7 = as.numeric(top_7),
+                            top_7 = ifelse(is.na(top_7), 0, top_7))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+### top_8
+
+This is the number of times topic 8 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_8", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_8 = as.numeric(top_8),
+                            top_8 = ifelse(is.na(top_8), 0, top_8))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+### top_9
+
+This is the number of times topic 9 was tweeted about of all the tweets from this individual.
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "top_9", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+We know this is a numeric variable and we can check the consistency on how it was calculated :
+
+```{r}
+finDat <- finDat %>% mutate(top_9 = as.numeric(top_9),
+                            top_9 = ifelse(is.na(top_9), 0, top_9))
+```
+
+There seems to be some relationship with retention.
+
+#### Missing Values
+
+None
+
+#### Final Feature
+
+We will leave the feature as is (numeric)
+
+## Global View {.tabset .tabset-fade}
+
+In this section we will plot the continuous variables together.
+
+There are too many variables to plot all of them in one graph, but we will split the data up by groups that makes logical sense
+
+### Twitter
+
+#### Polarity
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("pol_")), histogram=TRUE)
+```
+
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `pol_mean`.
+
+```{r}
+finDat <- finDat %>% select(-c(pol_min, pol_max, pol_med))
+```
+
+#### Subjectivity
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("sub_")), histogram=TRUE)
+```
+
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `sub_mean`.
+
+```{r}
+finDat <- finDat %>% select(-c(sub_min, sub_max, sub_med))
+```
+
+#### Tweet Length
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("twl_")), histogram=TRUE)
+```
+
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `twl_mean`.
+
+```{r}
+finDat <- finDat %>% select(-c(twl_min, twl_max, twl_med))
+```
+
+#### All Together
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(ends_with("_mean")), histogram=TRUE)
+```
+We can conclude that these aren't that correlated and we can continue with them.
+
+#### Twitter Topics
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("top_")), histogram=TRUE)
+```
+
+There aren't any topics that are extremely closely related.
+
+### Passanger Data
+
+```{r}
+PerformanceAnalytics::chart.Correlation(finDat %>% select(contains("PAX")), histogram=TRUE)
+```
+
+Here we can see that we remove 2 out of the three `Total_Discount_Pax`, `Num_of_non_FPP_PAX` and `Total_Pax`. Let's keep the one that is most complete.
+
+```{r}
+finDat %>% select(Total_Discount_Pax, Num_of_Non_FPP_PAX, Total_Pax) %>% summary()
+```
+
+We can hereby decide to keep `Total_Pax`.
+
+```{r}
+finDat <- finDat %>% select(-c(Total_Discount_Pax, Num_of_Non_FPP_PAX))
+```
+
+### Remaining 
+
+In this section we will find all the other highly correlated variables, plot and remove them.
+
+```{r}
+highlyCorDescr <- cor(finDat %>% select_if(is.numeric), use = "complete.obs") %>%
+  as.data.frame() %>%
+  mutate(var1 = rownames(.)) %>%
+  tidyr::gather(var2, value, -var1) %>%
+  arrange(desc(value)) %>%
+  group_by(value) %>%
+  filter(row_number()==1, abs(value) < 1, abs(value) > 0.8)
+
+PerformanceAnalytics::chart.Correlation(finDat %>% select(c(highlyCorDescr$var1, highlyCorDescr$var2) %>% unique()), histogram = TRUE)
+```
+
+From this we can remove the following highly correlated variables, `FPP`, `Tuition`, `To_Grade`, `Cancelled_Pax` and `FRP_Active`
+
+```{r}
+finDat <- finDat %>% select(-c(FPP, Tuition, To_Grade, Cancelled_Pax, FRP_Active))
+```
+
+### Low Variance
+
+In this section we will remove variables with low or zero variance.
+
+```{r}
+nzv <- caret::nearZeroVar(finDat, saveMetrics = TRUE) %>% filter(zeroVar == TRUE | nzv == TRUE) 
+finDat <- finDat %>% select(-c(rownames(nzv)))
+rm(nzv)
+```
+
+## Imputation
+
+Before we perform the imputation, let's inspect the **"missingness"** of the data.
+
+```{r}
+naniar::vis_miss(finDat, sort_miss = TRUE)
+```
+
+As we can see most of the data is present. Let's look only at missing columns.
+
+```{r}
+naniar::vis_miss(finDat %>% select(names(finDat)[colSums(is.na(finDat))>0]), sort_miss = TRUE)
+```
+
+### Categorical Impute
+
+```{r}
+finDat <- finDat %>% 
+  mutate_if(.predicate = is.character, 
+            .funs = function(x) { x[is.na(x)] <- "other"; return(x)})
+```
+
+### Numeric Impute
+
+In the next section we will split the data into train and test and perform the imputation separately for each.
+
+```{r}
+set.seed(2020)
+splitIndex <- createDataPartition(finDat$Retained_class, p = .75, list  = FALSE, times = 1)
+trainDF <- finDat[splitIndex,  ]
+testDF  <- finDat[-splitIndex, ]
+rm(splitIndex, finDat)
+```
+
+We should not combine the train and test set to obtain PCA components of whole data at once. Because, this would violate the entire assumption of generalization since test data would get ‘leaked’ into the training set. In other words, the test data set would no longer remain ‘unseen’. Eventually, this will hammer down the generalization capability of the model.
+
+```{r}
+trainDF_targ <- trainDF %>% select(Retained)
+trainDF      <- trainDF %>% select(-Retained)
+trainDF_cat  <- trainDF %>% select_if(is.character)
+trainDF_num  <- trainDF %>% select_if(is.numeric)
+
+nb_pca      <- missMDA::estim_ncpPCA(trainDF_num, ncp.max = 5)
+resMI_pca   <- missMDA::MIPCA(trainDF_num,        ncp = nb_pca$ncp)
+trainDF_num <- resMI_pca$res.imputePCA %>% as_tibble()
+
+trainDF <- bind_cols(trainDF_targ, trainDF_cat, trainDF_num)
+
+rm(nb_pca, resMI_pca, trainDF_targ, trainDF_cat, trainDF_num)
+
+testDF_targ <- testDF %>% select(Retained)
+testDF      <- testDF %>% select(-Retained)
+testDF_cat  <- testDF %>% select_if(is.character)
+testDF_num  <- testDF %>% select_if(is.numeric)
+
+nb_pca     <- missMDA::estim_ncpPCA(testDF_num, ncp.max = 5)
+resMI_pca  <- missMDA::MIPCA(testDF_num,        ncp = nb_pca$ncp)
+testDF_num <- resMI_pca$res.imputePCA %>% as_tibble()
+
+testDF <- bind_cols(testDF_targ, testDF_cat, testDF_num)
+
+rm(nb_pca, resMI_pca, testDF_targ, testDF_cat, testDF_num)
+```
+
+Next we will take a look at how complete the data is as a final check.
+
+```{r}
+c(names(trainDF)[colSums(is.na(trainDF)) > 0], names(testDF)[colSums(is.na(testDF)) > 0])
+```
+
+Indeed all missing data is complete. Next we can start our modelling phase.
+
+# Modelling
+
+```{r}
+# Parameters
+objControl <- trainControl(  
+    method          = "repeatedcv"
+  , number          = 10
+  , repeats         = 3
+  , classProbs      = TRUE
+  , summaryFunction = prSummary
+)
+
+set.seed(2020)
+gridSize <- 5
+gbmGrid <- data.frame(
+    interaction.depth = runif(gridSize, 1,     10) %>% round(0)
+  , n.trees           = runif(gridSize, 50,  1000) %>% round(0)
+  , n.minobsinnode    = runif(gridSize, 1,    100) %>% round(0)
+  , shrinkage         = runif(gridSize, 0.01, 0.2) %>% round(4)
+) %>% distinct()
+
+# Model
+formFeats  <- names(trainDF)[!(names(trainDF) %in% c("ID_SALES", "Retained", "Retained_class"))]
+frqFormula <- formula(paste0("Retained_class ~ ", paste0(formFeats, collapse = " + ")))
+
+set.seed(2020)
+objModel <- caret::train(frqFormula,
+                         data         = trainDF,
+                         distribution = "bernoulli",
+                         method       = "gbm",
+                         metric       = "F",
+                         trControl    = objControl,
+                         tuneGrid     = gbmGrid, 
+                         verbose      = FALSE)
+
+# Remove low importance features and retrain
+perf <- summary(objModel$finalModel)
+finalVars <- perf$var[perf$rel.inf > 0.5]
+toKeep <- c()
+for (ft in formFeats) {
+  if (sum(grepl(finalVars, pattern = ft)) > 0){
+    toKeep <- c(toKeep, ft)
+  }
+}
+
+set.seed(2021)
+gridSize <- 100
+gbmGrid <- data.frame(
+    interaction.depth = runif(gridSize, 1,     10) %>% round(0)
+  , n.trees           = runif(gridSize, 50,  1000) %>% round(0)
+  , n.minobsinnode    = runif(gridSize, 1,    100) %>% round(0)
+  , shrinkage         = runif(gridSize, 0.01, 0.2) %>% round(4)
+) %>% distinct()
+
+# Model
+frqFormula <- formula(paste0("Retained_class ~ ", paste0(toKeep, collapse = " + ")))
+
+set.seed(2020)
+objModel <- caret::train(frqFormula,
+                         data         = trainDF,
+                         distribution = "bernoulli",
+                         method       = "gbm",
+                         metric       = "F",
+                         trControl    = objControl,
+                         tuneGrid     = gbmGrid, 
+                         verbose      = FALSE)
+```
+
+## Evaluation
+
+### Overall Evaluation
+
+```{r}
+# Inspect
+gbm::gbm.perf(objModel$finalModel)
+```
+
+```{r}
+summary(objModel)
+```
+
+### Train
+
+```{r}
+trainDF$pred       <- predict(object = objModel, trainDF, type = "prob")$yes
+trainDF$pred_class <- predict(object = objModel, trainDF, type = "raw")
+
+liftDatTrain <- data.frame(obs = as.numeric(trainDF$Retained), pred = trainDF$pred) %>%
+  arrange(-pred) %>%
+  mutate(perc    = obs/sum(obs),
+         obsCum  = cumsum(obs),
+         predCum = cumsum(pred),
+         n       = 100 * (1:nrow(.))/nrow(.))
+
+f1_Train  <- MLmetrics::F1_Score(y_pred = trainDF %>% pull(pred_class), 
+                                 y_true = trainDF %>% pull(Retained_class))
+acc_Train <- MLmetrics::Accuracy(y_pred = trainDF %>% pull(pred_class), 
+                                 y_true = trainDF %>% pull(Retained_class))
+auc_Train <- MLmetrics::AUC(y_pred = trainDF %>% pull(pred), 
+                            y_true = trainDF %>% pull(Retained))
+
+liftDatTrain %>% 
+  plotly::plot_ly(x   = ~n, y = ~obsCum,  type = 'scatter', mode = 'lines', name = "Observed") %>%
+  plotly::add_lines(x = ~n, y = ~predCum, type = 'scatter', mode = 'lines', name = "Predicted") %>% 
+  plotly::layout(title = "Train Data - Lift Curve",
+                 xaxis = list(title = "Percentiles"),
+                 yaxis = list(title = "Observed/Predicted")) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 1500,
+                          text      = paste0("F1 Score = ", F1Train %>% round(digits = 4)),
+                          showarrow = FALSE) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 1400,
+                          text      = paste0("Accuracy = ", acc_Train %>% round(digits = 4)),
+                          showarrow = FALSE) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 1300,
+                          text      = paste0("AUC = ", aucTrain %>% round(digits = 4)),
+                          showarrow = FALSE)
+```
+
+```{r}
+pROC::roc(trainDF %>% pull(Retained), trainDF %>% pull(pred))
+```
+
+```{r}
+plot(pROC::roc(trainDF %>% pull(Retained), trainDF %>% pull(pred)))
+```
+
+### Test
+
+```{r}
+testDF$pred       <- predict(object = objModel, testDF, type = "prob")$yes
+testDF$pred_class <- predict(object = objModel, testDF, type = "raw")
+
+liftDatTest <- data.frame(obs = as.numeric(testDF$Retained), pred = testDF$pred) %>%
+  arrange(-pred) %>%
+  mutate(perc    = obs/sum(obs),
+         obsCum  = cumsum(obs),
+         predCum = cumsum(pred),
+         n       = 100 * (1:nrow(.))/nrow(.))
+
+f1_Test  <- MLmetrics::F1_Score(y_pred = testDF %>% pull(pred_class),
+                                y_true = testDF %>% pull(Retained_class))
+acc_Test <- MLmetrics::Accuracy(y_pred = testDF %>% pull(pred_class),
+                                y_true = testDF %>% pull(Retained_class))
+auc_Test <- MLmetrics::AUC(y_pred = testDF %>% pull(pred),
+                           y_true = testDF %>% pull(Retained))
+
+liftDatTest %>% 
+  plotly::plot_ly(x   = ~n, y = ~obsCum,  type = 'scatter', mode = 'lines', name = "Observed") %>%
+  plotly::add_lines(x = ~n, y = ~predCum, type = 'scatter', mode = 'lines', name = "Predicted") %>% 
+  plotly::layout(title = "Test Data - Lift Curve",
+                 xaxis = list(title = "Percentiles"),
+                 yaxis = list(title = "Observed/Predicted")) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 650,
+                          text      = paste0("F1 Score = ", f1_Test %>% round(digits = 4)),
+                          showarrow = FALSE) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 600,
+                          text      = paste0("Accuracy = ", acc_Test %>% round(digits = 4)),
+                          showarrow = FALSE) %>%
+  plotly::add_annotations(x         = 20,
+                          y         = 550,
+                          text      = paste0("AUC = ", auc_Test %>% round(digits = 4)),
+                          showarrow = FALSE)
+```
+
+```{r}
+pROC::roc(testDF %>% pull(Retained), testDF %>% pull(pred))
+```
+
+```{r}
+plot(pROC::roc(testDF %>% pull(Retained), testDF %>% pull(pred)))
+```
+
+## Inspection
+
+## By Variable
+
+### pol_mean
+
+```{r}
+plt <- plotTarget(datIn = testDF, var_inspect = "pol_mean", target = "Retained", predVar = "pred",
+                  numvar = TRUE, numVarBreaks = seq(-2,2,0.1),
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt <- plotTarget(datIn = trainDF, var_inspect = "pol_mean", target = "Retained", predVar = "pred",
+                  numvar = TRUE, numVarBreaks = seq(-2,2,0.1),
+                  autoBin = F)
+plt$plt
+```
+
+### Program_Code
+
+```{r}
+plt <- plotTarget(datIn = testDF, var_inspect = "Program_Code", target = "Retained", predVar = "pred",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt <- plotTarget(datIn = trainDF, var_inspect = "Program_Code", target = "Retained", predVar = "pred",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```

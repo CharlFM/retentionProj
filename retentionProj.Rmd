@@ -444,7 +444,7 @@ range01(x = c(1, 5, 20, 16, 18, 5, 9))
 
 Here we import pandas package for managing Datasets and load the data
 
-```{python}
+```{python eval = FALSE}
 import pandas as pd
 
 df    = pd.read_csv("0_data/twitter_model.csv", index_col = 0)
@@ -457,7 +457,7 @@ df.reset_index(inplace = True)
 
 Clean twitter dataset for removing English stopwords and applying Tokenize text
 
-```{python}
+```{python eval = FALSE}
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
@@ -486,7 +486,7 @@ stop_words = set(stop_words + stop_words2 + add_stop_words)
 
 Clean twitter dataset for removing punctuations, special characters, numerical values, special description words 
 
-```{python}
+```{python eval = FALSE}
 import re
 import string
 
@@ -530,7 +530,7 @@ data_clean
 
 Apply Normalization using Lemmatizer
 
-```{python}
+```{python eval = FALSE}
 from nltk.stem import WordNetLemmatizer
 wnl = WordNetLemmatizer()
 
@@ -554,7 +554,7 @@ data_clean_OK.text
 
 Creation of document-term matrix : word counts in matrix format
 
-```{python}
+```{python eval = FALSE}
 from sklearn.feature_extraction.text import CountVectorizer
 # Recreate document-term matrix
 cv = CountVectorizer(stop_words=stop_words)
@@ -565,7 +565,7 @@ data_stop.index = data_clean_OK.index
 
 Let's make some word clouds : a collection or cluster of the most common/tagged words depicted in different sizes
 
-```{python}
+```{python eval = FALSE}
 # Let's make some word clouds
 from wordcloud import WordCloud, STOPWORDS
 import matplotlib.pyplot as plt
@@ -588,7 +588,7 @@ plt.show()
 
 LSA (Latent Semantic Analysis) : it assumes that words that are close in meaning will occur in similar pieces of text
 
-```{python}
+```{python eval = FALSE}
 cv      = CountVectorizer(min_df = 1, max_df = 1, stop_words = stop_words)
 data_cv = cv.fit_transform(data_clean_OK.text)
 
@@ -603,7 +603,7 @@ data_tfidf
 
 Apply TruncatedSVD : this transformer performs linear dimensionality reduction by means of truncated singular value decomposition
 
-```{python}
+```{python eval = FALSE}
 from sklearn.decomposition import TruncatedSVD
 
 # SVD represent documents and terms in vectors 
@@ -619,7 +619,7 @@ print(svd_model.singular_values_)
 
 Identification of the first 30 relevant topics
 
-```{python}
+```{python eval = FALSE}
 terms = vectorizer.get_feature_names()
 
 for i, comp in enumerate(svd_model.components_):
@@ -635,7 +635,7 @@ for i, comp in enumerate(svd_model.components_):
 
 It helps to decode and quantify the emotions contained in the twitter dataset
 
-```{python}
+```{python eval = FALSE}
 import nltk
 nltk.download('vader_lexicon')
 
@@ -652,7 +652,7 @@ Calculation of Polarity And Subjectivity. Each word is labelled in terms of :
 - Polarity : it assumes values between -1 (negative) and +1 (positive)
 - Subjectivity : it assumes values between subjective (0) or fact (+1)
 
-```{python}
+```{python eval = FALSE}
 from textblob import TextBlob
 pol = lambda x: TextBlob(x).sentiment.polarity
 sub = lambda x: TextBlob(x).sentiment.subjectivity
@@ -665,7 +665,7 @@ print(data_clean_OK.head())
 
 Definition of threshold for the first 10 relevant topics. In order to identify the relation between topics and observations, the topic array has been calculated for each twitter
 
-```{python}
+```{python eval = FALSE}
 topic_array = svd_model.transform(data_tfidf)
 topic_array[topic_array >= 0.1] = 1
 topic_array[topic_array <  0.1] = 0.
@@ -4266,7 +4266,7 @@ From the result of all the individual models as well as the stacked and automati
 
 Here we create the pre-training step, where we will standardize the data. We also create the result data frame that will contain each model results at the end.
 
-```{r eval = FALSE}
+```{r}
 # Make sure we have consistent categorical levels
 formFeats  <- names(trainDF)[!(names(trainDF) %in% c("ID_SALES", "Retained", "Retained_class"))]
 modFormula <- formula(paste0("Retained_class ~ ", paste0(formFeats, collapse = " + ")))
@@ -4285,7 +4285,11 @@ test_h2o  <- testDF_baked  %>% h2o::as.h2o(destination_frame = "test_h2o")
 # Get response and feature names
 Y <- "Retained_class"
 X <- formFeats
+```
 
+The SVM model is a bit more specific and we need to assure that the same variables, with the same levels and numeric range is in both the test and train sets.
+
+```{r eval = FALSE}
 # Get the features that exist in both datasets - this is for the SVM model
 X_both <- c()
 for (var in X) {
@@ -5140,7 +5144,7 @@ plt$plt
 
 We can tell from this that the model is performing very well on this variable for both the test and train sets. Naturally it performs slightly better on the train set.
 
-### Program_Code
+#### Program_Code
 
 Next, we will look at the program code on the **test set**.
 
@@ -5162,7 +5166,7 @@ plt$plt
 
 Clearly again, find a good overall performance for this variable on both train and test set.
 
-### avePrice
+#### avePrice
 
 Next, we will look at the average price per participant on the **test set**.
 
@@ -5184,7 +5188,7 @@ plt$plt
 
 Clearly again, find a good overall performance for this variable on both train and test set.
 
-### SchoolGradeTypeHigh
+#### SchoolGradeTypeHigh
 
 Next, we will look at the an unimportant feature, the `SchoolGradeTypeHigh` on the **test set**.
 
@@ -5206,11 +5210,11 @@ plt$plt
 
 Clearly again, find a good overall performance for this variable on both train and test set. Even on features not deemed important by the model.
 
-## By Observation {.tabset .tabset-fade}
+### By Observation {.tabset .tabset-fade}
 
 In this section we will take a look at individual predictions, explaining why the prediction
 
-### Low Retention
+#### Low Retention
 
 First we find an observation with a low predicted retention.
 
@@ -5242,7 +5246,7 @@ The dotted line shows where the observation lies, hence it is clear to see, we c
 
 Here we can see that that the prediction make complete sense when considering the contributing.
 
-### Unsure Retention
+#### Unsure Retention
 
 First we find an observation with a mid-range predicted retention.
 
@@ -5278,7 +5282,7 @@ plotly::subplot(mr$ice$plots$pol_med %>% ggplotly(), mr$ice$plots$avePrice %>% g
 
 Here we can see that that the prediction make complete sense when considering the contributing.As none of these levels give clear confidence whether it should be retained or not.
 
-### High Retention
+#### High Retention
 
 First we find an observation with a high predicted retention.
 

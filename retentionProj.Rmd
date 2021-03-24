@@ -15,6 +15,9 @@ library(knitr)
 library(rmdformats)
 library(kableExtra)
 
+res        <- read.csv(file = "2_output/1_data/res.csv")
+allModsRes <- read.csv(file = "2_output/1_data/allMods.csv")
+
 ## Global options
 options(max.print = "75")
 opts_chunk$set(echo    = TRUE,
@@ -29,6 +32,23 @@ opts_knit$set(width = 75)
 
 # Introduction {.tabset .tabset-fade}
 
+For this project we are given a number of datasets; **sales**, **crm**, **finance** and **twitter** data. From these datasets, we will need to analyse the data and build a model that can accurately predict which customers are most likely to churn.
+
+The project is structured as follows :
+
+1. Analyse and extract features from the twitter data
+2. Combine all the data sources together in a single dataset
+3. Perform and Exploratory Data Analysis
+4. Build various models and inspect these to find the winning solution
+
+Once these steps are complete we provide an overall conclusion, based on the data provided.
+
+One of the challenges for our team was that we were skilled in both R and Python. To overcome this obstacle, we used RStudio and specifically a package called `reticulate` from R which allows us to run Python code directly from within R. This allowed the team to easily collaborate and learn from each other.
+
+```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("3_misc/groupLogo.PNG")
+```
+
 # Setup and Loading Data {.tabset .tabset-fade}
 
 In this section we will load all the libraries needed to perform our analysis as well as the raw data we received.
@@ -39,7 +59,7 @@ library(lubridate)
 library(dplyr)
 library(readr)
 library(plotly)
-library(cluster) 
+library(cluster)
 library(factoextra)
 library(FactoMineR)
 library(missMDA)
@@ -49,6 +69,10 @@ library(GGally)
 library(naniar)
 library(MLmetrics)
 library(gbm)
+library(rsample)
+library(recipes)
+library(h2o)
+library(gridExtra)
 
 day.abb <- c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -56,6 +80,11 @@ crmDat   <- readr::read_csv("0_data/crm_model.csv",     col_types = cols(.defaul
 finDat   <- readr::read_csv("0_data/finance_model.csv", col_types = cols(.default = "c"))
 salesDat <- readr::read_csv("0_data/sales_model.csv",   col_types = cols(.default = "c"))
 twiter   <- readr::read_csv("0_data/twitter_model.csv", col_types = cols(.default = "c"))
+
+# Upload the winning model and prediction threshold
+h2o::h2o.init(nthreads = 8, enable_assertions = FALSE)
+finMod    <- h2o::h2o.upload_model(path = list.files(path = "2_output/3_model/bin/", full.names = TRUE))
+finThresh <- finMod@model$default_threshold
 ```
 <br>
 
@@ -283,6 +312,7 @@ plotTarget <- function(datIn, var_inspect, var_expo = NULL, target, numvar = TRU
 ```
 
 Let's take a look at an example again
+
 ```{r}
 plt <- plotTarget(datIn = mtcars, var_inspect = "cyl", target = "mpg", autoBin = FALSE, numvar = FALSE)
 plt$plt
@@ -360,7 +390,6 @@ result %>% kableExtra::kable(format = "html") %>% kableExtra::kable_styling("str
 
 There are two options for the function that will allow you to either overwrite the variable of interest or create a new one.
 
-
 ```{r}
 rm(result)
 ```
@@ -391,23 +420,47 @@ Let's take an example :
 getSeason(c(as.Date("2020-12-30", format = "%Y-%m-%d"), as.Date("2021-04-12", format = "%Y-%m-%d")))
 ```
 
+## range01
+
+This is a small function that performs min-max scaling
+
+```{r}
+range01 <- function(x) {
+  res <- ((x-min(x))/(max(x)-min(x))) %>% round(4)
+  return(res)
+}
+```
+
+Let's take a look at an example 
+
+```{r}
+range01(x = c(1, 5, 20, 16, 18, 5, 9))
+```
+
+
 # Twitter Data 
 
-```{python eval = FALSE}
+## Import
+
+Here we import pandas package for managing Datasets and load the data
+
+```{python}
 import pandas as pd
 
-df    = pd.read_csv("twitter_model.csv", index_col = 0)
-sales = pd.read_csv("sales_model.csv",   index_col = 0)
+df    = pd.read_csv("0_data/twitter_model.csv", index_col = 0)
+sales = pd.read_csv("0_data/sales_model.csv",   index_col = 0)
 
 df.reset_index(inplace = True)
 ```
 
-## STOPWORDS - DELETE STOPWORDS
+## Stopwords
 
-```{python eval = FALSE}
+Clean twitter dataset for removing English stopwords and applying Tokenize text
+
+```{python}
+import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
-import nltk
 from sklearn.feature_extraction import text 
 from sklearn.feature_extraction.text import CountVectorizer
 import re
@@ -429,40 +482,33 @@ for sw in (stop_words + stop_words2):
 stop_words = set(stop_words + stop_words2 + add_stop_words)
 ```
 
-## CLEAN DATA
+## Clean Data
 
-```{python eval = FALSE}
+Clean twitter dataset for removing punctuations, special characters, numerical values, special description words 
+
+```{python}
 import re
 import string
 
 def clean_text_1(text):
-    # Lowercase
-    text = text.lower()
-    # Remove special text in brackets ([chorus],[guitar],etc)
-    text = re.sub('\[.*?\]', '', text)
-    # Remove punctuation
-    text = re.sub('[%s]' % re.escape(string.punctuation), '', text)
-    # Remove words containing numbers
-    text = re.sub('\w*\d\w*', '', text)   
-    # Remove quotes
-    text = re.sub('[‘’“”…]', '', text)
-    # Remove new line \n 
-    text = re.sub('\n', ' ', text)
-    # Remove stop_word
-    # stop_words = stopwords.words('english')
+    text = text.lower() # Lowercase
+    text = re.sub('[%s]' % re.escape(string.punctuation), '', text) # Remove punctuation
+    text = re.sub('[‘’“”…]', '', text) # Remove quotes
+    text = re.sub('\n', ' ', text) # Remove new line
+    text = re.sub('\\w*\\d\\w*', '', text) # Remove words containing numbers
+    text = re.sub('\\[.*?\\]', '', text) # Remove special text in brackets ([chorus],[guitar],etc)
     words = word_tokenize(text)
     new_text = ""
-
+    
     for w in words:
         if w not in stop_words and len(w) > 1:
             new_text = new_text + " " + w
-
+    
     # Remove characters that are not letters or spaces
-    new_text = re.sub('[^A-Za-z\s]+', '', new_text) 
-
+    new_text = re.sub('[^A-Za-z\\s]+', '', new_text)
+    
     # Remove words with 1 char
-    new_text = re.sub('\b[A-Za-z]{1}\b', '', new_text) 
-
+    new_text = re.sub('\b[A-Za-z]{1}\b', '', new_text)
     return new_text
 
 from sklearn.feature_extraction import text 
@@ -476,13 +522,15 @@ from nltk.stem import WordNetLemmatizer
 wnl = WordNetLemmatizer()
 
 data_clean = df.copy()
-data_clean['text'] = data_clean.text.apply(clean_text_1)
+data_clean['text'] = data_clean['text'].apply(clean_text_1)
 data_clean
 ```
 
-## LEMMATIZER
+## Lemmatizer
 
-```{python eval = FALSE}
+Apply Normalization using Lemmatizer
+
+```{python}
 from nltk.stem import WordNetLemmatizer
 wnl = WordNetLemmatizer()
 
@@ -501,9 +549,12 @@ def lemmatize_tag(text):
 # Apply lemmatizer
 data_clean_OK      = data_clean.copy()
 data_clean_OK.text = data_clean.text.apply(lemmatize_tag)
+data_clean_OK.text
 ```
 
-```{python eval = FALSE}
+Creation of document-term matrix : word counts in matrix format
+
+```{python}
 from sklearn.feature_extraction.text import CountVectorizer
 # Recreate document-term matrix
 cv = CountVectorizer(stop_words=stop_words)
@@ -512,15 +563,14 @@ data_stop = pd.DataFrame(data_cv.toarray(), columns=cv.get_feature_names())
 data_stop.index = data_clean_OK.index
 ```
 
-```{python eval = FALSE}
+Let's make some word clouds : a collection or cluster of the most common/tagged words depicted in different sizes
+
+```{python}
 # Let's make some word clouds
-!conda config --append channels conda-forge
 from wordcloud import WordCloud, STOPWORDS
 import matplotlib.pyplot as plt
 wc = WordCloud(collocations = False, stopwords = stop_words, background_color = "white", colormap = "Dark2", max_font_size = 150, random_state = 42)
-```
 
-```{python eval = FALSE}
 # Reset the output dimensions
 import matplotlib.pyplot as plt
 
@@ -534,13 +584,11 @@ plt.axis('off')
 plt.show()
 ```
 
-```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
-knitr::include_graphics("2_output/wordcloud.png")
-```
-
 ## LSA
 
-```{python eval = FALSE}
+LSA (Latent Semantic Analysis) : it assumes that words that are close in meaning will occur in similar pieces of text
+
+```{python}
 cv      = CountVectorizer(min_df = 1, max_df = 1, stop_words = stop_words)
 data_cv = cv.fit_transform(data_clean_OK.text)
 
@@ -551,7 +599,11 @@ tfidf      = vectorizer.fit_transform(data_clean_OK.text)
 data_tfidf = pd.DataFrame(tfidf.toarray(), columns = vectorizer.get_feature_names())
 data_tfidf.index = data_clean_OK.index
 data_tfidf
+```
 
+Apply TruncatedSVD : this transformer performs linear dimensionality reduction by means of truncated singular value decomposition
+
+```{python}
 from sklearn.decomposition import TruncatedSVD
 
 # SVD represent documents and terms in vectors 
@@ -563,9 +615,11 @@ print(svd_model.components_.shape)
 print(svd_model.singular_values_)
 ```
 
-## IDENTIFY TOPICS
+## Identify Topics
 
-```{python eval = FALSE}
+Identification of the first 30 relevant topics
+
+```{python}
 terms = vectorizer.get_feature_names()
 
 for i, comp in enumerate(svd_model.components_):
@@ -577,9 +631,11 @@ for i, comp in enumerate(svd_model.components_):
     print("")
 ```
 
-## APPLY VADER
+## Apply Vader
 
-```{python eval = FALSE}
+It helps to decode and quantify the emotions contained in the twitter dataset
+
+```{python}
 import nltk
 nltk.download('vader_lexicon')
 
@@ -589,25 +645,34 @@ sid         = SentimentIntensityAnalyzer()
 vader_score = data_clean_OK['text'].apply(lambda text: sid.polarity_scores(text))
 ```
 
-## DEFINE POLARITY/SUBJECTIVITY
+## Polarity And Subjectivity
 
-```{python eval = FALSE}
+Calculation of Polarity And Subjectivity. Each word is labelled in terms of :
+
+- Polarity : it assumes values between -1 (negative) and +1 (positive)
+- Subjectivity : it assumes values between subjective (0) or fact (+1)
+
+```{python}
 from textblob import TextBlob
 pol = lambda x: TextBlob(x).sentiment.polarity
 sub = lambda x: TextBlob(x).sentiment.subjectivity
-data_clean_OK['polarity'] = data_clean_OK['text'].apply(pol)
+data_clean_OK['polarity']     = data_clean_OK['text'].apply(pol)
 data_clean_OK['subjectivity'] = data_clean_OK['text'].apply(sub)
+print(data_clean_OK.head())
 ```
 
-## DEFINE THRESHOLD FOR TOPICS
+## Define Thresholds For Topics
 
-```{python eval = FALSE}
+Definition of threshold for the first 10 relevant topics. In order to identify the relation between topics and observations, the topic array has been calculated for each twitter
+
+```{python}
 topic_array = svd_model.transform(data_tfidf)
 topic_array[topic_array >= 0.1] = 1
-topic_array[topic_array <  0.1] = 0
-n_topics = 10 
-columns_name = [f'TOPIC {i}' for i in range(n_topics)]
-df_topics = pd.DataFrame(topic_array[:,:n_topics], index = data_clean_OK.index, columns = columns_name)
+topic_array[topic_array <  0.1] = 0.
+
+n_topics       = 10
+columns_name   = [f'TOPIC {i}' for i in range(n_topics)]
+df_topics      = pd.DataFrame(topic_array[:,:n_topics], index = data_clean_OK.index, columns = columns_name)
 df_text_topics = data_clean_OK.merge(df_topics, left_index = True, right_index = True)
 
 # Merge between sales dataset and twitter dataset
@@ -964,7 +1029,9 @@ Due to the limited knowledge of the datasets we work with, we were forced to tak
 
 Now that we have our full dataset let's take a quick look at the data, how the variables relate to each other and to the target (a customer being retained or not).
 
-In this section we will study the variables one-by-one to ensure that we have a clear and full understanding of how the data works.
+In this section we will study the variables one-by-one to ensure that we have a clear and full understanding of how the data works. The reason for investigating the variables one-by-one is that we would like to ensure that we understand each variable appropriately and that we treat it accordingly. This was re-inforced especially after we noticed a few strange occurences in the data.
+
+We will also investigate the variables from a global perspective and remove redundent variables. 
 
 ## Global Overview
 
@@ -1009,6 +1076,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Program_Code", target = "Retain
                   autoBin = F)
 plt$plt
 ```
+
 We can see from the plot above that the `Program_Code` seems to be important in terms of the retention.
 
 Clearly this variable has a lot of levels with low exposure, applying our `smartGrouper` function we find :
@@ -1051,6 +1119,8 @@ We will perform PCA to impute the missing values, however this can only be done 
 
 #### Final Feature
 
+We simply convert it to a numeric variable.
+
 ```{r}
 finDat <- finDat %>% mutate(From_Grade = as.numeric(From_Grade))
 ```
@@ -1072,6 +1142,8 @@ We will perform PCA to impute the missing values, however this can only be done 
 
 #### Final Feature
 
+We simply convert it to a numeric variable.
+
 ```{r}
 finDat <- finDat %>% mutate(To_Grade = as.numeric(To_Grade))
 ```
@@ -1092,8 +1164,12 @@ As we can see the states are quite sparse. What we can do here is to group the s
 Here we define the grouping :
 
 ```{r}
-stateGrouping <- tibble(Group_State = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
-                        Group_main_region = c("south", "west", "west", "south", "west", "west", "northeast", "south", "south", "south", "west", "west", "midwest", "midwest", "midwest", "midwest", "south", "south", "northeast", "south", "northeast", "midwest", "midwest", "midwest", "south", "midwest", "west", "midwest", "west", "northeast", "northeast", "west", "northeast", "northeast", "south", "midwest", "midwest", "south", "west", "northeast", "northeast", "south", "midwest", "south", "south", "west", "northeast", "south", "west", "south", "midwest", "west"))
+stateGrouping <- tibble(
+  Group_State = c("AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY"),
+  Group_main_region = c("south", "west", "west", "south", "west", "west", "northeast", "south", "south", "south", "west", "west", "midwest", "midwest", "midwest", "midwest", "south", "south", "northeast", "south", "northeast", "midwest", "midwest", "south", "midwest", "west", "midwest", "west", "northeast", "northeast", "west", "northeast", "south", "midwest", "midwest", "south", "west", "northeast", "northeast", "south", "midwest", "south", "south", "west", "northeast", "south", "west", "south", "midwest", "west"),
+  Group_north_south = c("south", "north", "south", "south", "south", "north", "north", "south", "south", "south", "south", "north", "north", "north", "north", "north", "south", "south", "north", "north", "north", "north", "north", "south", "north", "north", "north", "north", "north", "north", "south", "north", "south", "north", "north", "south", "north", "north", "north", "south", "north", "south", "south", "north", "north", "south", "north", "north", "north", "north"),
+  Group_east_west = c("east", "west", "west", "west", "west", "west", "east", "east", "east", "east", "west", "west", "east", "east", "west", "west", "east", "west", "east", "east", "east", "east", "west", "east", "west", "west", "west", "west", "east", "east", "west", "east", "east", "west", "east", "west", "west", "east", "east", "east", "west", "east", "west", "west", "east", "east", "west", "east", "east", "west")
+)
 ```
 
 Now we will merge these results back on to the original dataset and inspect the new features.
@@ -1105,6 +1181,20 @@ rm(stateGrouping)
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "Group_main_region", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Group_north_south", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt <- plotTarget(datIn = finDat, var_inspect = "Group_east_west", target = "Retained",
                   numvar = F,
                   autoBin = F)
 plt$plt
@@ -1122,12 +1212,13 @@ These states are foreign states, **Bermuda**, **Mexico**, **Puerto Rico** and **
 
 #### Final Feature
 
-Imputing the missing values and dropping the original variable.
+Imputing the missing values as **other** and dropping the original variable.
 
 ```{r}
 finDat <- finDat %>% 
-  mutate(Group_main_region = ifelse(is.na(Group_main_region), "other", Group_main_region)) %>% 
-  select(-Group_State)
+  mutate(Group_main_region = ifelse(is.na(Group_main_region), "other", Group_main_region),
+         Group_north_south = ifelse(is.na(Group_north_south), "other", Group_north_south),
+         Group_east_west   = ifelse(is.na(Group_east_west),   "other", Group_east_west))
 ```
 
 ### Days
@@ -1200,6 +1291,8 @@ None
 
 #### Final Feature
 
+Keeping `Travel_Type` **A** as **air** and the rest as **ground**.
+
 ```{r}
 finDat <- finDat %>% mutate(Travel_Type = if_else(Travel_Type == "A", "air", "ground"))
 ```
@@ -1215,9 +1308,9 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Departure_Date", target = "Reta
 plt$plt
 ```
 
-The departure date could result in a number of interesting features :
+The date could result in a number of interesting features :
 
-Month of departure
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::month(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
@@ -1226,7 +1319,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::month(lu
 plt$plt
 ```
 
-Season of departure
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = getSeason(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
@@ -1235,9 +1328,9 @@ plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = getSeason(lubridate
 plt$plt
 ```
 
-Here we can clearly see that the departure season definitely weighs on the retention.
+Here we can clearly see that the **season** definitely weighs on the retention.
 
-We could also consinder the departure day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::wday(lubridate::mdy(Departure_Date))), var_inspect = "Departure_Date", target = "Retained",
@@ -1246,7 +1339,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Departure_Date = lubridate::wday(lub
 plt$plt
 ```
 
-There is no clear reason to include the day of week.
+There is no clear reason to include the **day of week**.
 
 #### Missing Values
 
@@ -1254,7 +1347,7 @@ None
 
 #### Final Feature
 
-We don't care as much about the date itself, but rather the departure month and season.
+We don't care as much about the date itself, but rather the **month** and **season**. For the time being we will keep the date since we will use this to make some other features later on.
 
 ```{r}
 finDat <- finDat %>%
@@ -1273,9 +1366,9 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Return_Date", target = "Retaine
 plt$plt
 ```
 
-The return date could result in a number of interesting features :
+The date could result in a number of interesting features :
 
-Month of return
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::month(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
@@ -1284,7 +1377,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::month(lubri
 plt$plt
 ```
 
-Season of return
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = getSeason(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
@@ -1293,9 +1386,9 @@ plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = getSeason(lubridate::m
 plt$plt
 ```
 
-Here we can clearly see that the return month and season definitely weighs on the retention.
+Here we can clearly see that the **month** and **season** definitely weighs on the retention.
 
-We could also consider the return day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::wday(lubridate::mdy(Return_Date))), var_inspect = "Return_Date", target = "Retained",
@@ -1304,7 +1397,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Return_Date = lubridate::wday(lubrid
 plt$plt
 ```
 
-There is no clear reason to include the day of week.
+There is no clear reason to include the **day of week**.
 
 #### Missing Values
 
@@ -1312,7 +1405,7 @@ None
 
 #### Final Feature
 
-We don't care as much about the date itself, but rather the return month and season.
+We don't care as much about the date itself, but rather the **month** and **season**.
 
 ```{r}
 finDat <- finDat %>%
@@ -1334,7 +1427,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = lubridate::month(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
@@ -1343,7 +1436,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = lubridate::month(lubrida
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = getSeason(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
@@ -1354,7 +1447,7 @@ plt$plt
 
 There are no clear signal so far.
 
-We could also consider the return day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Early_RPL = lubridate::wday(lubridate::mdy(Early_RPL))), var_inspect = "Early_RPL", target = "Retained",
@@ -1392,7 +1485,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::month(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
@@ -1401,7 +1494,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::month(lubrid
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = getSeason(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
@@ -1412,7 +1505,7 @@ plt$plt
 
 There are no clear signal so far.
 
-We could also consider the return day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::wday(lubridate::mdy(Latest_RPL))), var_inspect = "Latest_RPL", target = "Retained",
@@ -1421,7 +1514,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Latest_RPL = lubridate::wday(lubrida
 plt$plt
 ```
 
-The only signal we can detect is that the missing values are much lower than the rest.
+The only signal we can detect is that the missing values are much higher than the rest.
 
 #### Missing Values
 
@@ -1541,7 +1634,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = lubridate::month(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
@@ -1550,7 +1643,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = lubridate::mon
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = getSeason(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
@@ -1559,9 +1652,9 @@ plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = getSeason(lubr
 plt$plt
 ```
 
-Here we can clearly see that the season definitely weighs on the retention.
+Here we can clearly see that the **season** definitely weighs on the retention.
 
-We could also consider the day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Initial_System_Date = lubridate::wday(lubridate::mdy(Initial_System_Date))), var_inspect = "Initial_System_Date", target = "Retained",
@@ -1574,7 +1667,7 @@ It seems that as the `Initial_System_Date` increase (from Monday to Sunday) then
 
 #### Missing Values
 
-There are some missing values, we apply MCA to perform the imputation at the end.
+We will group these into a separate level **other**
 
 #### Final Feature
 
@@ -1597,6 +1690,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Product_Type", target = "Re
                   autoBin = F)
 plt$plt
 ```
+
 Here we can see that 3 of the categories are extremely infrequent. We will group these.
 
 ```{r}
@@ -1608,7 +1702,7 @@ plt$plt
 
 #### Missing Values
 
-We can also consider how we should treat missing values, however in this case we know that we don't have any.
+None.
 
 #### Final Feature
 
@@ -1702,7 +1796,7 @@ It seems that the more passengers we have, the more likely it is that they will 
 
 What we also know is that we can calculate this from the individual components :
 
-$$Total_Pax = FPP + Total_Discount_Pax$$
+$$totalPax = FPP + totalDiscountPax$$
 
 ```{r}
 ((finDat$FPP + finDat$Total_Discount_Pax - finDat$Total_Pax)/finDat$Total_Pax) %>% summary()
@@ -1767,7 +1861,7 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-None
+None, although the level **Undefined** will be treated as missing.
 
 #### Final Feature
 
@@ -1792,7 +1886,7 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-Will be imputed via MCA
+None, although the level **Undefined** will be treated as missing.
 
 #### Final Feature
 
@@ -1819,7 +1913,9 @@ We could also consider ignoring this variable as it is a combination of 2 existi
 
 #### Missing Values
 
-Will be imputed from the previous imputed values, after they are imputed.
+```{r}
+finDat <- finDat %>% mutate(GroupGradeType = ifelse(GroupGradeType == "Undefined->Undefined", NA, GroupGradeType))
+```
 
 #### Final Feature
 
@@ -1854,7 +1950,7 @@ This is the target variable, this indicates whether the customer was retained or
 finDat$Retained %>% table(useNA = "always") %>% prop.table()
 ```
 
-Here we can see that 61% of all customers are retained. This is good news, since it means that dataset is well-balanced. A naive model will have a prediction accuracy of 61%, giving us a very rough bencmark of what to beat.
+Here we can see that 61% of all customers are retained. This is good news, since it means that dataset is well-balanced. A naive model will have a prediction accuracy of 61%, giving us a very rough benchmark of what to beat.
 
 ```{r}
 finDat$Retained %>% class()
@@ -1871,7 +1967,8 @@ None
 We will add another feature as `yes` and `no`. Care will be taken not to include these as part of the feature space.
 
 ```{r}
-finDat <- finDat %>% mutate(Retained_class = if_else(Retained == 0, "no", "yes"))
+finDat <- finDat %>% mutate(Retained       = as.numeric(Retained),
+                            Retained_class = if_else(Retained == 0, "no", "yes"))
 ```
 
 ### Poverty_Code
@@ -1930,7 +2027,7 @@ We will group all the **other** categories as **other**
 finDat <- finDat %>% mutate(Region = ifelse(Region %in% c("Southern California", "Northern California", "Pacific Northwest", "Houston", "Dallas"), Region, "other"))
 ```
 
-### CRM_Segment
+### CRM_Segment *
 
 CRM code segment (internal code)
 
@@ -1984,7 +2081,7 @@ There is nothing we need to do here.
 
 #### Missing Values
 
-We will perform the missing value imputation using an MCA technique.
+These will be encoded as **other**
 
 #### Final Feature
 
@@ -2005,11 +2102,13 @@ There is nothing we need to do here.
 
 #### Missing Values
 
-We will perform the missing value imputation using an MCA technique.
+We will group theses with the most frequent class.
 
 #### Final Feature
 
-No need for any engineering.
+```{r}
+finDat <- finDat %>% mutate(Parent_Meeting_Flag = if_else(is.na(Parent_Meeting_Flag), "1", Parent_Meeting_Flag))
+```
 
 ### MDR_Low_Grade
 
@@ -2022,18 +2121,18 @@ plt <- plotTarget(datIn = finDat, var_inspect = "MDR_Low_Grade", target = "Retai
 plt$plt
 ```
 
-The grades **K** and **PK** are Kindergarden and Pre-Kindergarden. We can transform these to -1 and -2 and convert the variable to a numeric type.
+We found that the grade **K** is for Kindergarten and this is equivalent to grade **0** we then chose to categorise **PK** which is *Pre-Kindergarten* as **-1** and convert the variable to a numeric type.
 
 #### Missing Values
 
-We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `MDR_Low_Grade` is lower than `MDR_High_Grade`.
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
 
 #### Final Feature
 
 ```{r}
 finDat <- finDat %>% 
-  mutate(MDR_Low_Grade = ifelse(MDR_Low_Grade == "K",  "-1", MDR_Low_Grade),
-         MDR_Low_Grade = ifelse(MDR_Low_Grade == "PK", "-2", MDR_Low_Grade) %>% as.numeric())
+  mutate(MDR_Low_Grade = ifelse(MDR_Low_Grade == "K",  "0", MDR_Low_Grade),
+         MDR_Low_Grade = ifelse(MDR_Low_Grade == "PK", "-1", MDR_Low_Grade) %>% as.numeric())
 ```
 
 ### MDR_High_Grade
@@ -2047,18 +2146,18 @@ plt <- plotTarget(datIn = finDat, var_inspect = "MDR_High_Grade", target = "Reta
 plt$plt
 ```
 
-The grades **K** and **PK** are Kindergarden and Pre-Kindergarden. We can transform these to -1 and -2 and convert the variable to a numeric type.
+We found that the grade **K** is for Kindergarten and this is equivalent to grade **0** we then chose to categorise **PK** which is *Pre-Kindergarten* as **-1** and convert the variable to a numeric type.
 
 #### Missing Values
 
-We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class. The imputation will be bounded such that the `MDR_Low_Grade` is lower than `MDR_High_Grade`.
+We will perform PCA to impute the missing values, however this can only be done once all variables are parsed to the correct class.
 
 #### Final Feature
 
 ```{r}
 finDat <- finDat %>% 
-  mutate(MDR_High_Grade = ifelse(MDR_High_Grade == "K",  "-1", MDR_High_Grade),
-         MDR_High_Grade = ifelse(MDR_High_Grade == "PK", "-2", MDR_High_Grade) %>% as.numeric())
+  mutate(MDR_High_Grade = ifelse(MDR_High_Grade == "K",  "0", MDR_High_Grade),
+         MDR_High_Grade = ifelse(MDR_High_Grade == "PK", "-1", MDR_High_Grade) %>% as.numeric())
 ```
 
 ### Total_School_Enrollment
@@ -2106,7 +2205,7 @@ We will perform PCA to impute the missing values, however this can only be done 
 
 We will leave the feature as is (numeric)
 
-### FPP_to_School_enrollment
+### FPP_to_School_enrollment *
 
 The ratio of FPP to School Enrolments
 
@@ -2180,6 +2279,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retain
                   autoBin = F)
 plt$plt
 ```
+
 We can see multiple missing value types, `0`, `NA` and `Z` should all be classed as `other`. We will also group `P` with `P1`, `P3`, `P4` and `P5`.
 
 ```{r}
@@ -2217,11 +2317,15 @@ There is nothing we need to do here.
 
 #### Missing Values
 
-We will perform the missing value imputation using an MCA technique.
+We will group it with the most frequent level
 
 #### Final Feature
 
 No need for any engineering.
+
+```{r}
+finDat <- finDat %>% mutate(SPR_New_Existing = if_else(is.na(SPR_New_Existing), "1", SPR_New_Existing))
+```
 
 ### NumberOfMeetingswithParents 
 
@@ -2305,7 +2409,7 @@ There is no clear reason to include the day of week.
 
 #### Missing Values
 
-None
+Grouped as **other**
 
 #### Final Feature
 
@@ -2361,11 +2465,11 @@ We can also see that the day of week have a relationship with the retention.
 
 #### Missing Values
 
-None
+This will be grouped as **other**
 
 #### Final Feature
 
-We don't see any reason to include the variable.
+We will keep the Season and week day.
 
 ```{r}
 finDat <- finDat %>%
@@ -2480,7 +2584,7 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-The missing values will be imputed using MCA. 
+They will be grouped with **Undefined** and named **other**.
 
 #### Final Feature
 
@@ -2503,7 +2607,7 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-The missing values will be imputed using MCA. 
+They will be grouped with **Undefined** and named **other**.
 
 #### Final Feature
 
@@ -2526,11 +2630,13 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-The missing values will be a combination of the imputed results from before. 
+These will be grouped as **other** and the **Undefined->Undefined** will also be grouped in the same category.
 
 #### Final Feature
 
-Nothing to do
+```{r}
+finDat <- finDat %>% mutate(SchoolGradeType = ifelse(SchoolGradeType == "Undefined->Undefined", NA, SchoolGradeType))
+```
 
 ### SchoolSizeIndicator
 
@@ -2547,7 +2653,7 @@ There is nothing we need to do with this variable.
 
 #### Missing Values
 
-The missing values will be a combination of the imputed using MCA. 
+Will be grouped as **other**.
 
 #### Final Feature
 
@@ -2566,7 +2672,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::month(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
@@ -2575,7 +2681,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::month(lubr
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = getSeason(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
@@ -2586,7 +2692,7 @@ plt$plt
 
 No evidence exists that it weighs on the retention.
 
-We could also consider the day of the week :
+We could also consider the **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::wday(lubridate::mdy(Deposit_Date))), var_inspect = "Deposit_Date", target = "Retained",
@@ -2595,7 +2701,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(Deposit_Date = lubridate::wday(lubri
 plt$plt
 ```
 
-There is no clear reason to include the day of week.
+There is no clear reason to include the **day of week**.
 
 The final variable of interest could be the time between the deposit date and the trip start date
 
@@ -2618,7 +2724,7 @@ We don't care as much about the date itself, rather the time difference between 
 
 ```{r}
 finDat <- finDat %>%
-  mutate(depositToDeparture = (lubridate::mdy(Departure_Date)-lubridate::mdy(Deposit_Date)) %>% as.character() %>% as.numeric()) %>%
+  mutate(depositToDeparture = (lubridate::mdy(Departure_Date) - lubridate::mdy(Deposit_Date)) %>% as.character() %>% as.numeric()) %>%
   select(-c(Deposit_Date, Departure_Date))
 ```
 
@@ -2646,7 +2752,7 @@ Clearly this grouping seems a lot more reasonable that what we have observed bef
 
 #### Missing Values
 
-None.
+Will be labelled as **other**.
 
 #### Final Feature
 
@@ -2656,7 +2762,7 @@ Nothing other than the grouping as mentioned before.
 finDat <- finDat %>% mutate(Special_Pay = ifelse(Special_Pay %in% c("CP", "FR", "SA"), Special_Pay, "other"))
 ```
 
-### Tuition
+### Tuition *
 
 Price per full-payment participant (FPP)
 
@@ -2693,13 +2799,28 @@ plt$plt
 
 There seems to be some indication that less tuition have a better retention.
 
+This variable also sparked interest in the average price across the entire group, not just the FPP price.
+
+```{r}
+plt <- plotTarget(datIn = finDat %>% mutate(avePrice = as.numeric(SPR_Group_Revenue)/Total_Pax), var_inspect = "avePrice", target = "Retained",
+                  numvar = T, 
+                  autoBin = F)
+plt$plt
+```
+
+Here we can clearly see that as the average price per participant increase, so does the retention rate decrease.
+
 #### Missing Values
 
 PCA for imputation
 
 #### Final Feature
 
-We will leave the feature as is (numeric)
+We will leave the feature as is (numeric) and create the average price per group `avePrice`.
+
+```{r}
+finDat <- finDat %>% mutate(avePrice = as.numeric(SPR_Group_Revenue)/Total_Pax)
+```
 
 ### FRP_Active
 
@@ -2745,7 +2866,6 @@ PCA for imputation
 #### Final Feature
 
 We will leave the feature as is (numeric)
-
 
 ### FRP_Cancelled
 
@@ -2893,11 +3013,13 @@ There is nothing we need to do here.
 
 #### Missing Values
 
-We will perform the missing value imputation using an MCA technique.
+We will group the missing values with the most frequent level.
 
 #### Final Feature
 
-No need for any engineering.
+```{r}
+finDat <- finDat %>% mutate(School_Sponsor = if_else(is.na(School_Sponsor), "0", School_Sponsor))
+```
 
 ### SPR_Group_Revenue
 
@@ -2944,7 +3066,7 @@ PCA for imputation
 
 We will leave the feature as is (numeric)
 
-### FPP_to_PAX
+### FPP_to_PAX *
 
 Percentage of FPP.
 
@@ -3047,7 +3169,7 @@ There seems to be some relationship with retention.
 
 #### Missing Values
 
-None
+PCA for imputation.
 
 #### Final Feature
 
@@ -3931,61 +4053,80 @@ There are too many variables to plot all of them in one graph, but we will split
 
 ### Twitter
 
+We start with the twitter data since it is the most obvious set of correlated numeric variables.
+
 #### Polarity
 
+Let's take a look at the polarity.
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("pol_")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("pol_")), histogram = TRUE)
 ```
 
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `pol_mean`.
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `pol_med`.
 
 ```{r}
-finDat <- finDat %>% select(-c(pol_min, pol_max, pol_med))
+finDat <- finDat %>% select(-c(pol_min, pol_max, pol_mean))
 ```
 
 #### Subjectivity
 
+Let's take a look at the subjectivity.
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("sub_")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("sub_")), histogram = TRUE)
 ```
 
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `sub_mean`.
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `sub_med`.
 
 ```{r}
-finDat <- finDat %>% select(-c(sub_min, sub_max, sub_med))
+finDat <- finDat %>% select(-c(sub_min, sub_max, sub_mean))
 ```
 
 #### Tweet Length
 
+Let's take a look at the tweet lengths.
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("twl_")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("twl_")), histogram = TRUE)
 ```
 
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `twl_mean`.
+We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `twl_med`.
 
 ```{r}
-finDat <- finDat %>% select(-c(twl_min, twl_max, twl_med))
+finDat <- finDat %>% select(-c(twl_min, twl_max, twl_mean))
 ```
 
 #### All Together
 
+Looking at all the twitter information together we find the following :
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(ends_with("_mean")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(ends_with("_med")), histogram = TRUE)
 ```
+
 We can conclude that these aren't that correlated and we can continue with them.
 
 #### Twitter Topics
 
+Let's take a look at the topics we got from the twitter data.
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("top_")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("top_")), histogram = TRUE)
 ```
 
-There aren't any topics that are extremely closely related.
+There aren't any topics that are extremely closely related. However, these topics weren't identified as particularly predictive therefore we will drop them.
+
+```{r}
+finDat <- finDat %>% select(-starts_with("top_"))
+```
 
 ### Passanger Data
 
+Next we will look at all the passenger related variables, hence variables containing the text **PAX**.
+
 ```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(contains("PAX")), histogram=TRUE)
+PerformanceAnalytics::chart.Correlation(finDat %>% select(contains("PAX")), histogram = TRUE)
 ```
 
 Here we can see that we remove 2 out of the three `Total_Discount_Pax`, `Num_of_non_FPP_PAX` and `Total_Pax`. Let's keep the one that is most complete.
@@ -4002,7 +4143,7 @@ finDat <- finDat %>% select(-c(Total_Discount_Pax, Num_of_Non_FPP_PAX))
 
 ### Remaining 
 
-In this section we will find all the other highly correlated variables, plot and remove them.
+In this section we will find all the other highly correlated numeric variables plot and remove them.
 
 ```{r}
 highlyCorDescr <- cor(finDat %>% select_if(is.numeric), use = "complete.obs") %>%
@@ -4016,15 +4157,16 @@ highlyCorDescr <- cor(finDat %>% select_if(is.numeric), use = "complete.obs") %>
 PerformanceAnalytics::chart.Correlation(finDat %>% select(c(highlyCorDescr$var1, highlyCorDescr$var2) %>% unique()), histogram = TRUE)
 ```
 
-From this we can remove the following highly correlated variables, `FPP`, `Tuition`, `To_Grade`, `Cancelled_Pax` and `FRP_Active`
+From this we can remove the following highly correlated variables, `FPP`, `Tuition`, `To_Grade`, `Cancelled_Pax` and `FRP_Active` that can be removed.
 
 ```{r}
 finDat <- finDat %>% select(-c(FPP, Tuition, To_Grade, Cancelled_Pax, FRP_Active))
+rm(highlyCorDescr)
 ```
 
 ### Low Variance
 
-In this section we will remove variables with low or zero variance.
+In this section we will remove variables with low or zero variance. The best way to explain this is by example. If a level has 99% of the time the same category and 1% of the time another category then that variable will have a low/near-zero variance.
 
 ```{r}
 nzv <- caret::nearZeroVar(finDat, saveMetrics = TRUE) %>% filter(zeroVar == TRUE | nzv == TRUE) 
@@ -4048,6 +4190,8 @@ naniar::vis_miss(finDat %>% select(names(finDat)[colSums(is.na(finDat))>0]), sor
 
 ### Categorical Impute
 
+As mentioned during the EDA phase, we will impute all categorical missing values with the lable **other**.
+
 ```{r}
 finDat <- finDat %>% 
   mutate_if(.predicate = is.character, 
@@ -4066,7 +4210,7 @@ testDF  <- finDat[-splitIndex, ]
 rm(splitIndex, finDat)
 ```
 
-We should not combine the train and test set to obtain PCA components of whole data at once. Because, this would violate the entire assumption of generalization since test data would get ‘leaked’ into the training set. In other words, the test data set would no longer remain ‘unseen’. Eventually, this will hammer down the generalization capability of the model.
+We should not combine the train and test set to obtain PCA components of whole data at once. Because, this would violate the entire assumption of generalization since test data would get 'leaked' into the training set. In other words, the test data set would no longer remain unseen. Eventually, this will hammer down the generalization capability of the model.
 
 ```{r}
 trainDF_targ <- trainDF %>% select(Retained)
@@ -4079,6 +4223,7 @@ resMI_pca   <- missMDA::MIPCA(trainDF_num,        ncp = nb_pca$ncp)
 trainDF_num <- resMI_pca$res.imputePCA %>% as_tibble()
 
 trainDF <- bind_cols(trainDF_targ, trainDF_cat, trainDF_num)
+trainDF <- trainDF %>% mutate(MDR_High_Grade_Class = if_else(MDR_High_Grade <= 8, "lower", "higher"))
 
 rm(nb_pca, resMI_pca, trainDF_targ, trainDF_cat, trainDF_num)
 
@@ -4092,6 +4237,7 @@ resMI_pca  <- missMDA::MIPCA(testDF_num,        ncp = nb_pca$ncp)
 testDF_num <- resMI_pca$res.imputePCA %>% as_tibble()
 
 testDF <- bind_cols(testDF_targ, testDF_cat, testDF_num)
+testDF <- testDF %>% mutate(MDR_High_Grade_Class = if_else(MDR_High_Grade <= 8, "lower", "higher"))
 
 rm(nb_pca, resMI_pca, testDF_targ, testDF_cat, testDF_num)
 ```
@@ -4104,92 +4250,766 @@ c(names(trainDF)[colSums(is.na(trainDF)) > 0], names(testDF)[colSums(is.na(testD
 
 Indeed all missing data is complete. Next we can start our modelling phase.
 
-# Modelling
+# Modelling {.tabset .tabset-fade}
 
-```{r}
-# Parameters
-objControl <- trainControl(  
-    method          = "repeatedcv"
-  , number          = 10
-  , repeats         = 3
-  , classProbs      = TRUE
-  , summaryFunction = prSummary
-)
+For the main part of the process, we need to train our model.
 
-set.seed(2020)
-gridSize <- 5
-gbmGrid <- data.frame(
-    interaction.depth = runif(gridSize, 1,     10) %>% round(0)
-  , n.trees           = runif(gridSize, 50,  1000) %>% round(0)
-  , n.minobsinnode    = runif(gridSize, 1,    100) %>% round(0)
-  , shrinkage         = runif(gridSize, 0.01, 0.2) %>% round(4)
-) %>% distinct()
+We will apply the following strategy :
 
-# Model
+1. Train various models (glm, nb, svm, gbm and nn)
+2. Stack these models
+3. Perform **h2o**'s `h2o::h2o.automl` to train a number of competing models (including stacking)
+
+From the result of all the individual models as well as the stacked and automatically trained models, we will choose a winning model based on the train set.
+
+## Data Prep
+
+Here we create the pre-training step, where we will standardize the data. We also create the result data frame that will contain each model results at the end.
+
+```{r eval = FALSE}
+# Make sure we have consistent categorical levels
 formFeats  <- names(trainDF)[!(names(trainDF) %in% c("ID_SALES", "Retained", "Retained_class"))]
-frqFormula <- formula(paste0("Retained_class ~ ", paste0(formFeats, collapse = " + ")))
+modFormula <- formula(paste0("Retained_class ~ ", paste0(formFeats, collapse = " + ")))
 
-set.seed(2020)
-objModel <- caret::train(frqFormula,
-                         data         = trainDF,
-                         distribution = "bernoulli",
-                         method       = "gbm",
-                         metric       = "F",
-                         trControl    = objControl,
-                         tuneGrid     = gbmGrid, 
-                         verbose      = FALSE)
+blueprint <- recipes::recipe(modFormula, data = trainDF) %>% recipes::step_scale(recipes::all_numeric())
 
-# Remove low importance features and retrain
-perf <- summary(objModel$finalModel)
-finalVars <- perf$var[perf$rel.inf > 0.5]
-toKeep <- c()
-for (ft in formFeats) {
-  if (sum(grepl(finalVars, pattern = ft)) > 0){
-    toKeep <- c(toKeep, ft)
+trainDF_baked <- recipes::prep(blueprint, training = trainDF, retain = TRUE) %>% recipes::juice()
+testDF_baked  <- recipes::prep(blueprint, training = trainDF)                %>% recipes::bake(new_data = testDF)
+
+h2o::h2o.init(nthreads = 8, enable_assertions = FALSE)
+
+# Create training & test sets for h2o
+train_h2o <- trainDF_baked %>% h2o::as.h2o(destination_frame = "train_h2o")
+test_h2o  <- testDF_baked  %>% h2o::as.h2o(destination_frame = "test_h2o")
+
+# Get response and feature names
+Y <- "Retained_class"
+X <- formFeats
+
+# Get the features that exist in both datasets - this is for the SVM model
+X_both <- c()
+for (var in X) {
+  if (is.character(trainDF[[var]])) {
+    trLevs <- unique(trainDF[[var]])
+    tsLevs <- unique(testDF[[var]])
+    if (length(setdiff(trLevs, tsLevs)) == 0){
+      X_both <- c(X_both, var)
+    }
+  } else {
+    trRange <- trainDF[[var]] %>% range()
+    tsRange <- testDF[[var]]  %>% range()
+    
+    if (trRange[1] == tsRange[1] & trRange[2] == tsRange[2]) {
+      X_both <- c(X_both, var) 
+    }
   }
 }
 
-set.seed(2021)
-gridSize <- 100
-gbmGrid <- data.frame(
-    interaction.depth = runif(gridSize, 1,     10) %>% round(0)
-  , n.trees           = runif(gridSize, 50,  1000) %>% round(0)
-  , n.minobsinnode    = runif(gridSize, 1,    100) %>% round(0)
-  , shrinkage         = runif(gridSize, 0.01, 0.2) %>% round(4)
-) %>% distinct()
+formFeats_svm  <- names(trainDF[, c(Y, X_both)])[!(names(trainDF[, c(Y, X_both)]) %in% c("ID_SALES", "Retained", "Retained_class"))]
+modFormula_svm <- formula(paste0("Retained_class ~ ", paste0(formFeats_svm, collapse = " + ")))
 
-# Model
-frqFormula <- formula(paste0("Retained_class ~ ", paste0(toKeep, collapse = " + ")))
+blueprint_svm <- recipes::recipe(modFormula_svm, data = trainDF[, c(Y, X_both)]) %>% recipes::step_scale(recipes::all_numeric())
 
+train_h2o_svm <- recipes::prep(blueprint_svm, training = trainDF[, c(Y, X_both)], retain = TRUE) %>%
+  recipes::juice() %>%
+  h2o::as.h2o(destination_frame = "train_h2o_svm")
+test_h2o_svm <- recipes::prep(blueprint_svm, training = trainDF) %>%
+  recipes::bake(new_data = testDF[, c(Y, X_both)]) %>%
+  h2o::as.h2o(destination_frame = "test_h2o_svm")
+
+res <- tibble(model    = c("glm",   "glm",  "nb",    "nb",   "svm",   "svm",  "gbm",   "gbm",  "nn",    "nn",   "stacked", "stacked", "auto",    "auto"),
+              set      = c("train", "test", "train", "test", "train", "test", "train", "test", "train", "test", "train",   "test",    "train",   "test"),
+              auc      = c(NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,        NA,        NA,        NA),
+              accuracy = c(NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,        NA,        NA,        NA),
+              f1_score = c(NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,      NA,     NA,        NA,        NA,        NA))
+```
+
+## GLM
+
+For the first model we will perform logistic regression, by applying a Generalized Linear Model. GLM models based on the maximum likelihood estimation via iteratively reweighed least squares. 
+
+The tuning parameters that we will consider to train the optimal GLM is $\alpha$ and $\lambda$. These are regularization parameters that we will tune to ensure we have the optimal GLM.
+
+```{r eval = FALSE}
+# GLM hyperparameters
 set.seed(2020)
-objModel <- caret::train(frqFormula,
-                         data         = trainDF,
-                         distribution = "bernoulli",
-                         method       = "gbm",
-                         metric       = "F",
-                         trControl    = objControl,
-                         tuneGrid     = gbmGrid, 
-                         verbose      = FALSE)
+gridSize <- 100
+glmParams <- data.frame(
+  alpha = runif(gridSize, 0, 1) %>% round(4)
+) %>% distinct() %>% as.list()
+
+# Train and validate a cartesian grid of GLMs
+glmGrid <- h2o::h2o.grid(
+    algorithm                         = "glm"
+  , x                                 = X
+  , y                                 = Y
+  , grid_id                           = "glm_grid"
+  , family                            = "binomial"   
+  , lambda_search                     = TRUE
+  , training_frame                    = train_h2o
+  , nfolds                            = 2
+  , seed                              = 1
+  , hyper_params                      = glmParams
+  , keep_cross_validation_predictions = TRUE
+)
+
+# Get the grid results, sorted by validation F1 Score
+glmGridPerf <- h2o::h2o.getGrid(
+    grid_id    = "glm_grid"
+  , sort_by    = "f1"
+  , decreasing = TRUE
+)
+
+# Grab the top GLM model, chosen by validation F1 Score
+best_glm <- h2o::h2o.getModel(glmGridPerf@model_ids[[1]])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+best_glm_perf_test <- h2o::h2o.performance(
+    model   = best_glm
+  , newdata = test_h2o
+)
+
+best_glm_perf_train <- h2o::h2o.performance(
+    model   = best_glm
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_glm <- best_glm@model$default_threshold
+res$auc     [res$model == "glm" & res$set == "train"] <- h2o::h2o.auc(object = best_glm_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "glm" & res$set == "train"] <- h2o::h2o.F1(object = best_glm_perf_train, thresholds = f1_thresh_glm)[[1]] %>% round(4)
+res$accuracy[res$model == "glm" & res$set == "train"] <- h2o::h2o.accuracy(object = best_glm_perf_train, thresholds = f1_thresh_glm)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "glm" & res$set == "test"] <- h2o::h2o.auc(object = best_glm_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "glm" & res$set == "test"] <- h2o::h2o.F1(object = best_glm_perf_test, thresholds = f1_thresh_glm)[[1]] %>% round(4)
+res$accuracy[res$model == "glm" & res$set == "test"] <- h2o::h2o.accuracy(object = best_glm_perf_test, thresholds = f1_thresh_glm)[[1]] %>% round(4)
+res %>% filter(!is.na(f1_score))
 ```
 
-## Evaluation
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm"))
+```
 
-### Overall Evaluation
+As we can see the resulting GLM produces a good model, not over-fitting with a very high AUC and F1-score.
+
+## Naive Bayes
+
+Naïve Bayes is a classification algorithm that relies on strong assumptions of the independence of covariates in applying Bayes Theorem. The only parameter we will tune here is the Laplace smoothing parameter.
+
+```{r eval = FALSE}
+# NB hyperparameters
+nbParams <- list(
+    laplace = c(0, 1, 2, 3, 4, 5, 10, 15, 20, 50, 100, 1000)
+)
+
+search_criteria_nb <- list(
+    strategy         = "RandomDiscrete"
+  , max_runtime_secs = 3600
+  , max_models       = 100
+  , seed             = 1
+)
+
+# Train and validate a cartesian grid of GLMs
+nbGrid <- h2o::h2o.grid(
+    algorithm                         = "naivebayes"
+  , x                                 = X
+  , y                                 = Y
+  , grid_id                           = "nb_grid"
+  , training_frame                    = train_h2o
+  , nfolds                            = 2
+  , seed                              = 1
+  , hyper_params                      = nbParams
+  , search_criteria                   = search_criteria_nb
+  , keep_cross_validation_predictions = TRUE
+)
+
+# Get the grid results, sorted by validation F1 Score
+nbGridPerf <- h2o::h2o.getGrid(
+    grid_id    = "nb_grid"
+  , sort_by    = "f1"
+  , decreasing = TRUE
+)
+
+# Grab the top GLM model, chosen by validation F1 Score
+best_nb <- h2o::h2o.getModel(nbGridPerf@model_ids[[1]])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+best_nb_perf_test <- h2o::h2o.performance(
+    model   = best_nb
+  , newdata = test_h2o
+)
+
+best_nb_perf_train <- h2o::h2o.performance(
+    model   = best_nb
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_nb <- best_nb@model$default_threshold
+res$auc     [res$model == "nb" & res$set == "train"] <- h2o::h2o.auc(object = best_nb_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "nb" & res$set == "train"] <- h2o::h2o.F1(object = best_nb_perf_train, thresholds = f1_thresh_nb)[[1]] %>% round(4)
+res$accuracy[res$model == "nb" & res$set == "train"] <- h2o::h2o.accuracy(object = best_nb_perf_train, thresholds = f1_thresh_nb)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "nb" & res$set == "test"] <- h2o::h2o.auc(object = best_nb_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "nb" & res$set == "test"] <- h2o::h2o.F1(object = best_nb_perf_test, thresholds = f1_thresh_nb)[[1]] %>% round(4)
+res$accuracy[res$model == "nb" & res$set == "test"] <- h2o::h2o.accuracy(object = best_nb_perf_test, thresholds = f1_thresh_nb)[[1]] %>% round(4)
+res%>% filter(!is.na(f1_score))
+```
+
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm", "nb"))
+```
+
+Clearly the Naive Bayes model does not perform nearly as well as the GLM.
+
+## SVM
+
+We will next apply a Support Vector Machine. SVM can be formulated as a quadratic optimization problem.
+
+The two hyper-parameters we will tune is **C** (or in our list `hyper_param`) is a hyper-parameter which is set before the training model and used to control error and **Gamma** is also a hyper-parameter which is set before the training model and used to give curvature weight of the decision boundary.
+
+
+```{r eval = FALSE}
+# SVM hyperparameters
+svmParams <- list(
+    gamma       = c(0.001, 0.005, 0.01, 0.05)
+  , hyper_param = c(0.001, 0.01, 0.1, 1, 10, 100)
+) 
+
+search_criteria_svm <- list(
+    strategy         = "RandomDiscrete"
+  , max_runtime_secs = 3600
+  , max_models       = 100
+  , seed             = 1
+)
+
+# Train and validate a cartesian grid of SVMs
+svmGrid <- h2o::h2o.grid(
+    algorithm                         = "psvm"
+  , x                                 = X_both
+  , y                                 = Y
+  , grid_id                           = "svm_grid"
+  , training_frame                    = train_h2o_svm
+  , nfolds                            = 3
+  , seed                              = 1
+  , hyper_params                      = svmParams
+  , search_criteria                   = search_criteria_svm
+  , keep_cross_validation_predictions = TRUE
+)
+
+# Get the grid results, sorted by validation F1 Score
+svmGridPerf <- h2o::h2o.getGrid(grid_id = "svm_grid")
+svmF1Res <- c()
+for (ii in 1:(svmGridPerf@model_ids %>% length())) {
+  svmMod <- h2o::h2o.getModel(svmGridPerf@model_ids[[ii]])
+  temp_perf <- h2o::h2o.performance(
+      model   = svmMod
+    , newdata = train_h2o_svm)
+  f1_thresh_svm_temp <- h2o::h2o.F1(temp_perf) %>% filter(f1 == max(f1)) %>% pull(threshold)
+  if (length(f1_thresh_svm_temp) == 0) {
+    svmResF1 <- 0
+  } else {
+    svmResF1 <- h2o::h2o.F1(object = temp_perf, thresholds = f1_thresh_svm_temp)[[1]]
+  }
+  svmF1Res <- c(svmF1Res, svmResF1)
+}
+
+best_svm <- h2o::h2o.getModel(svmGridPerf@model_ids[[which(svmF1Res==max(svmF1Res))]])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+best_svm_perf_test <- h2o::h2o.performance(
+    model   = best_svm
+  , newdata = test_h2o_svm
+)
+
+best_svm_perf_train <- h2o::h2o.performance(
+    model   = best_svm
+  , newdata = train_h2o_svm
+)
+
+## Get the results for Train
+f1_thresh_svm <- best_svm@model$default_threshold
+res$auc     [res$model == "svm" & res$set == "train"] <- NA
+res$f1_score[res$model == "svm" & res$set == "train"] <- h2o::h2o.F1(object = best_svm_perf_train, thresholds = f1_thresh_svm)[[1]] %>% round(4)
+res$accuracy[res$model == "svm" & res$set == "train"] <- h2o::h2o.accuracy(object = best_svm_perf_train, thresholds = f1_thresh_svm)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "svm" & res$set == "test"] <- NA
+res$f1_score[res$model == "svm" & res$set == "test"] <- h2o::h2o.F1(object = best_svm_perf_test, thresholds = f1_thresh_svm)[[1]] %>% round(4)
+res$accuracy[res$model == "svm" & res$set == "test"] <- h2o::h2o.accuracy(object = best_svm_perf_test, thresholds = f1_thresh_svm)[[1]] %>% round(4)
+res %>% filter(!is.na(f1_score))
+```
+
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm", "nb", "svm"))
+```
+
+It seems like our SVM does not outperform our GLM. However, this is still a pretty good model.
+
+## GBM
+
+The next model is a Gradient Boosting Model. Gradient Boosting Machine is a forward learning ensemble method. There are a large number of parameters that we will tune for the GBM, the main parameters are :
+
+- **max_depth** - this will control how deep the trees split, deeper trees (high values) are more prone to over fit.
+- **min_rows** - this is the minimum number of observation we would like to have per final node. The smaller the number the more likely you are to over fit
+- **col_sample_rate** and **sample_rate** - these are the row and column sampling parameters. By randomly sampling different rows and columns per tree, we help make the model more generalizable.
+
+We do not add the learning rate or number of trees in the search space, since we opt to enable early stopping and rate annealing. Therefore we keep a sufficiently large amount of trees (so that it will never be reached). Using the early stopping, we will stop training if we don't improve the fit by 1% in the following 10 iterations. Rate annealing, will allow us to speed up the learning at the start (when there is a lot to learn) and the slow it down when there are more to learn. 
+
+```{r eval = FALSE}
+gbmParams <- list( 
+    max_depth = seq(1, 10, 1) ## restrict the search to the range of max_depth established above
+  , sample_rate = seq(0.2, 1, 0.01) ## Space of row sampling rates per tree
+  , col_sample_rate = seq(0.2, 1, 0.01) ## Column sampling rates per split
+  , col_sample_rate_per_tree = seq(0.2, 1, 0.01) ## column sampling rates per tree
+  , col_sample_rate_change_per_level = seq(0.9, 1.1, 0.01) ## How column sampling per split should change as a function of depth of the split
+  , min_rows = c(50, 70, 100) ## search a large space of the number of min rows in a terminal node
+  , nbins = 2^seq(4, 10, 1) ## search a large space of the number of bins for split-finding for continuous and integer columns
+  , nbins_cats = 2^seq(4, 12, 1) ## search a large space of the number of bins for split-finding for categorical columns
+  , min_split_improvement = c(0, 0.0001, 0.000001, 0.00000001)## search a few minimum required relative error improvement thresholds for a split to happen
+  , histogram_type = c("UniformAdaptive", "QuantilesGlobal", "RoundRobin") ## Try types (QuantilesGlobal, RoundRobin good for numeric columns with outliers)
+)
+
+search_criteria_gbm <- list(
+    strategy = "RandomDiscrete" ## Random grid search
+  , max_runtime_secs = 3600 ## limit the runtime to 60 minutes
+  , max_models = 100 ## build no more than 100 models
+  , seed = 1 ## random number generator seed to make sampling of parameter combinations reproducible
+  ## early stopping once the leaderboard of the top 5 models is converged to 0.1% relative difference
+  , stopping_rounds = 5
+  , stopping_tolerance = 0.01
+)
+
+gbmGrid <- h2o::h2o.grid(
+    ## standard model parameters
+    x = X
+  , y = Y
+  , training_frame = train_h2o
+
+  , hyper_params = gbmParams  ## hyper parameters
+  , search_criteria = search_criteria_gbm ## hyper-parameter search configuration (see above)
+  , algorithm = "gbm" ## which algorithm to run
+  , grid_id = "gbm_grid" ## identifier for the grid, to later retrieve it
+  , nfolds = 2 ## number of CV folds
+  , ntrees = 10000 ## more trees is better if the learning rate is small enough use "more than enough" trees - we have early stopping
+  , learn_rate = 0.1 ## smaller learning rate is better since we have learning_rate_annealing, we can afford to start with a bigger learning rate
+  , learn_rate_annealing = 0.99 ## learning rate annealing: learning_rate shrinks by 1% after every tree
+  , max_runtime_secs = 3600 ## early stopping based on timeout (no model should take more than 1 hour - modify as needed)
+  
+  ## early stopping once the leaderboard of the top 5 models is converged to 0.1% relative difference
+  , stopping_rounds = 5
+  , stopping_tolerance = 0.01
+
+  ## score every 10 trees to make early stopping reproducible (it depends on the scoring interval)
+  , score_tree_interval = 10
+  , seed = 1
+  
+  , keep_cross_validation_predictions = TRUE
+)
+
+# Get the grid results, sorted by validation F1 Score
+gbmGridPerf <- h2o::h2o.getGrid(
+    grid_id    = "gbm_grid"
+  , sort_by    = "f1"
+  , decreasing = TRUE
+)
+
+# Grab the top GBM model, chosen by validation F1 Score
+best_gbm <- h2o::h2o.getModel(gbmGridPerf@model_ids[[1]])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+best_gbm_perf_test <- h2o::h2o.performance(
+    model   = best_gbm
+  , newdata = test_h2o
+)
+
+best_gbm_perf_train <- h2o::h2o.performance(
+    model   = best_gbm
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_gbm <- best_gbm@model$default_threshold
+res$auc     [res$model == "gbm" & res$set == "train"] <- h2o::h2o.auc(object = best_gbm_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "gbm" & res$set == "train"] <- h2o::h2o.F1(object = best_gbm_perf_train, thresholds = f1_thresh_gbm)[[1]] %>% round(4)
+res$accuracy[res$model == "gbm" & res$set == "train"] <- h2o::h2o.accuracy(object = best_gbm_perf_train, thresholds = f1_thresh_gbm)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "gbm" & res$set == "test"] <- h2o::h2o.auc(object = best_gbm_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "gbm" & res$set == "test"] <- h2o::h2o.F1(object = best_gbm_perf_test, thresholds = f1_thresh_gbm)[[1]] %>% round(4)
+res$accuracy[res$model == "gbm" & res$set == "test"] <- h2o::h2o.accuracy(object = best_gbm_perf_test, thresholds = f1_thresh_gbm)[[1]] %>% round(4)
+res %>% filter(!is.na(f1_score))
+```
+
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm", "nb", "svm", "gbm"))
+```
+
+From what we see, the GBM performs the best on the test set based on the F1 score. The GBM over-fits the data, but it stands as champion.
+
+## Neural Network
+
+Deep Learning is based on a multi-layer feed-forward artificial neural network that is trained with stochastic gradient descent using back-propagation. The network can contain a large number of hidden layers consisting of neurons with `tanh`, `rectifier`, and `maxout` activation functions. Advanced features such as adaptive learning rate, rate annealing, momentum training, drop-out, L1 or L2 regularization, check-pointing, and grid search enable high predictive accuracy. 
+
+We will tune different activation functions, both L1 and L2 normalization, the number of hidden layers as well as the drop-out ratio.
+
+```{r eval = FALSE}
+# NN hyper parameters
+nnParams <- list(
+    activation          = c("Rectifier", "Tanh", "Maxout", "RectifierWithDropout", "TanhWithDropout", "MaxoutWithDropout")
+  , l1                  = c(0, 0.00001, 0.0001, 0.001, 0.01)
+  , l2                  = c(0, 0.00001, 0.0001, 0.001, 0.01)
+  , hidden              = list(c(20, 20), c(32, 32, 32), c(64, 64, 64), c(128, 128, 128))
+  , input_dropout_ratio = c(0, 0.05)
+)
+
+search_criteria_nn <-  list(
+    strategy           = "RandomDiscrete"
+  , max_runtime_secs   = 3600
+  , max_models         = 100
+  , seed               = 1
+  , stopping_rounds    = 5
+  , stopping_tolerance = 0.01
+)
+
+# Train and validate grid of NN
+nnGrid <- h2o::h2o.grid(
+    algorithm                         = "deeplearning"
+  , x                                 = X
+  , y                                 = Y
+  
+  , epochs                            = 100000
+  
+  , rate                              = 0.05
+  , rate_annealing                    = 0.99
+  , max_runtime_secs                  = 3600
+
+  , stopping_tolerance                = 0.01
+  , stopping_rounds                   = 5
+  , max_w2                            = 10
+  , grid_id                           = "nn_grid"
+  , training_frame                    = train_h2o
+  , nfolds                            = 2
+  , seed                              = 1
+  , hyper_params                      = nnParams
+  , search_criteria                   = search_criteria_nn
+  , keep_cross_validation_predictions = TRUE
+)
+
+# Get the grid results, sorted by validation F1 Score
+nnGridPerf <- h2o::h2o.getGrid(
+    grid_id    = "nn_grid"
+  , sort_by    = "f1"
+  , decreasing = TRUE
+)
+
+# Grab the top GLM model, chosen by validation F1 Score
+best_nn <- h2o::h2o.getModel(nnGridPerf@model_ids[[1]])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+best_nn_perf_test <- h2o::h2o.performance(
+    model   = best_nn
+  , newdata = test_h2o
+)
+
+best_nn_perf_train <- h2o::h2o.performance(
+    model   = best_nn
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_nn <- best_nn@model$default_threshold
+res$auc     [res$model == "nn" & res$set == "train"] <- h2o::h2o.auc(object = best_nn_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "nn" & res$set == "train"] <- h2o::h2o.F1(object = best_nn_perf_train, thresholds = f1_thresh_nn)[[1]] %>% round(4)
+res$accuracy[res$model == "nn" & res$set == "train"] <- h2o::h2o.accuracy(object = best_nn_perf_train, thresholds = f1_thresh_nn)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "nn" & res$set == "test"] <- h2o::h2o.auc(object = best_nn_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "nn" & res$set == "test"] <- h2o::h2o.F1(object = best_nn_perf_test, thresholds = f1_thresh_nn)[[1]] %>% round(4)
+res$accuracy[res$model == "nn" & res$set == "test"] <- h2o::h2o.accuracy(object = best_nn_perf_test, thresholds = f1_thresh_nn)[[1]] %>% round(4)
+res %>% filter(!is.na(f1_score))
+```
+
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm", "nb", "svm", "gbm", "nn"))
+```
+
+It seems that our GLM still remains the leader. The NN does not improve on any KPI. It is also over-fits the train data.
+
+## Stacking
+
+Now that we have trained all of our models, we will try to outperform the individual winners by stacking them instead. Stacked Ensemble method is a supervised ensemble machine learning algorithm that finds the optimal combination of a collection of prediction algorithms using a process called stacking.
+
+For the stacking we will choose the 3 best models from our GLM, GBM and NN. We exclude the SVM since its performance is significantly lower than the other model forms.
+
+```{r eval = FALSE}
+# Train a stacked tree ensemble
+ensemble <- h2o::h2o.stackedEnsemble(
+    x                     = X
+  , y                     = Y
+  , training_frame        = train_h2o
+  , model_id              = "ensemble"
+  , base_models           = append(glmGrid@model_ids[1:3], gbmGrid@model_ids[1:3])
+  , metalearner_algorithm = "deeplearning" # drf glm gbm deeplearning
+)
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+stack_perf_test <- h2o::h2o.performance(
+    model   = ensemble
+  , newdata = test_h2o
+)
+
+stack_perf_train <- h2o::h2o.performance(
+    model   = ensemble
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_stack <- ensemble@model$default_threshold
+res$auc     [res$model == "stacked" & res$set == "train"] <- h2o::h2o.auc(object = stack_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "stacked" & res$set == "train"] <- h2o::h2o.F1(object = stack_perf_train, thresholds = f1_thresh_stack)[[1]] %>% round(4)
+res$accuracy[res$model == "stacked" & res$set == "train"] <- h2o::h2o.accuracy(object = stack_perf_train, thresholds = f1_thresh_stack)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc     [res$model == "stacked" & res$set == "test"] <- h2o::h2o.auc(object = stack_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "stacked" & res$set == "test"] <- h2o::h2o.F1(object = stack_perf_test, thresholds = f1_thresh_stack)[[1]] %>% round(4)
+res$accuracy[res$model == "stacked" & res$set == "test"] <- h2o::h2o.accuracy(object = stack_perf_test, thresholds = f1_thresh_stack)[[1]] %>% round(4)
+res %>% filter(!is.na(f1_score))
+```
+
+```{r echo = FALSE}
+res %>% filter(model %in% c("glm", "nb", "svm", "gbm", "nn", "stacked"))
+```
+
+Here we can see that the stacked result increased the overall performance by 0.64, whilst this is indeed better than the GLM, the stacked model over-fits the training data. The preferred model still remains our GLM.
+
+## AutoML
+
+For our final attempt, we will use an automated method. 
+
+H2O's AutoML can be used for automating the machine learning workflow, which includes automatic training and tuning of many models within a user-specified time-limit. Stacked Ensembles – one based on all previously trained models, another one on the best model of each family – will be automatically trained on collections of individual models to produce highly predictive ensemble models which, in most cases, will be the top performing models in the AutoML Leaderboard.
+
+The only parameters we need to set here is the amount of time you would like it to run for (in seconds). Then we chose to include a number of stopping rounds as we did before.
+
+```{r eval = FALSE}
+aml <- h2o::h2o.automl(
+    x                                     = X
+  , y                                     = Y
+  , training_frame                        = train_h2o
+  , max_runtime_secs                      = 3600
+  , seed                                  = 1
+  , nfolds                                = 2
+  , keep_cross_validation_predictions     = TRUE
+  , keep_cross_validation_fold_assignment = TRUE
+)
+
+scores <- c()
+for (md in aml@leaderboard %>% as_tibble() %>% pull(model_id)) {
+  autoScore <- h2o::h2o.getModel(md)
+  scores <- c(scores, autoScore@model$training_metrics@metrics$AUC)
+}
+
+mods <- aml@leaderboard %>% as_tibble() %>% pull(model_id)
+
+best_auto <- h2o::h2o.getModel(mods[which(scores == max(scores[scores<0.999]))])
+
+# Now let's evaluate the model performance on a test set so we get an honest estimate of top model performance
+auto_perf_test <- h2o::h2o.performance(
+    model   = best_auto
+  , newdata = test_h2o
+)
+
+auto_perf_train <- h2o::h2o.performance(
+    model   = best_auto
+  , newdata = train_h2o
+)
+
+## Get the results for Train
+f1_thresh_auto <- best_auto@model$default_threshold
+res$auc     [res$model == "auto" & res$set == "train"] <- h2o::h2o.auc(object = auto_perf_train)[[1]] %>% round(4)
+res$f1_score[res$model == "auto" & res$set == "train"] <- h2o::h2o.F1(object = auto_perf_train, thresholds = f1_thresh_auto)[[1]] %>% round(4)
+res$accuracy[res$model == "auto" & res$set == "train"] <- h2o::h2o.accuracy(object = auto_perf_train, thresholds = f1_thresh_auto)[[1]] %>% round(4)
+
+## Get the results for Train
+res$auc[res$model == "auto" & res$set == "test"] <- h2o::h2o.auc(object = auto_perf_test)[[1]] %>% round(4)
+res$f1_score[res$model == "auto" & res$set == "test"] <- h2o::h2o.F1(object = auto_perf_test, thresholds = f1_thresh_auto)[[1]] %>% round(4)
+res$accuracy[res$model == "auto" & res$set == "test"] <- h2o::h2o.accuracy(object = auto_perf_test, thresholds = f1_thresh_auto)[[1]] %>% round(4)
+# Save the final results
+write.csv(res, file = "2_output/1_data/res.csv", row.names = FALSE)
+# Display
+res %>% filter(!is.na(f1_score)) %>% tail(6)
+```
+
+```{r echo = FALSE}
+res %>% tail(6)
+```
+
+We can see that the automated learning did not prove to be very successful.
+
+## Final Model {.tabset .tabset-fade}
+
+In the model building process, we trained over 1000 models. The winners chosen was based on the train set only, meaning we still have a lot of models to test on the test set as well.
+
+In this step we will de exactly that. We will calculate the F1 score on both the train and test set for each model trained and then pick the winner.
+
+```{r eval = FALSE}
+allMods <- h2o::h2o.list_models()
+
+allModsRes <- tibble(modID = allMods) %>% mutate(trainF1 = 0, testF1 = 0)
+for (ii in 1:length(allMods)) {
+  mod    <- allMods[ii]
+  modObj <- h2o::h2o.getModel(mod)
+  
+  all_perf_test  <- h2o::h2o.performance(model = modObj, newdata = test_h2o)
+  all_perf_train <- h2o::h2o.performance(model = modObj, newdata = train_h2o)
+  
+  allModsRes$modID[ii]   <- mod
+  f1_thresh_all          <- modObj@model$default_threshold
+  allModsRes$trainF1[ii] <- h2o::h2o.F1(object = all_perf_train, thresholds = f1_thresh_all)[[1]] %>% round(4)
+  allModsRes$testF1[ii]  <- h2o::h2o.F1(object = all_perf_test, thresholds = f1_thresh_all)[[1]] %>% round(4)
+
+}
+
+allModsRes <- allModsRes %>% mutate(diff = abs(trainF1 - testF1)) %>% arrange(-testF1) %>% filter(trainF1 < 1, diff < 0.05)
+# Store the result
+write.csv(allModsRes, file = "2_output/1_data/allMods.csv", row.names = FALSE)
+allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
+```
+
+```{r echo = FALSE}
+allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
+```
+
+From this it is clear that we will choose the model `GBM_grid__1_AutoML_20210323_032348_model_14` since it produced the highest F1 score and there isn't sufficient proof of over fitting. Here is the model parameters :
+
+```{r eval = FALSE}
+finMod    <- h2o::h2o.getModel("GBM_grid__1_AutoML_20210323_032348_model_14")
+finThresh <- finMod@model$default_threshold
+```
+
+We will also export this model (to prevent re-training all the models).
+
+```{r eval = FALSE}
+model_path <- h2o::h2o.saveModel(object = finMod, path = "2_output/3_model/", force = TRUE)
+
+# load the model
+saved_model <- h2o::h2o.loadModel(model_path)
+
+# download the model built above to your local machine
+my_local_model <- h2o::h2o.download_model(model = finMod, path = "2_output/3_model/bin/", export_cross_validation_predictions = TRUE)
+```
+
+Now that we have found our winner, we will inspect the model in more details.
+
+### Model Specifications {.tabset .tabset-fade}
+
+#### Parameters
+
+Let's take a look at the main parameters underlying the model.
 
 ```{r}
-# Inspect
-gbm::gbm.perf(objModel$finalModel)
+finMod@allparameters
+```
+
+#### Cross Validation Summary
+
+Here we will take a look at the cross validation summary. we are looking for a good metric value, with a low **sd** (i.e. consistency across folds).
+
+```{r}
+finMod@model$cross_validation_metrics_summary
+```
+
+The result seems good! We can also take a look at some other metrics (dependent on a threshold). Here we will find the max F1 score.
+
+```{r}
+finMod@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores
+```
+
+Indeed we find a great F1 Score.
+
+#### Train Summary
+
+Next we will inspect the overall train results.
+
+```{r}
+finMod@model$training_metrics@metrics$max_criteria_and_metric_scores
+```
+
+The F1 score increase somewhat over the entire training space, which is normal.
+
+### In-Depth Evaluation {.tabset .tabset-fade}
+
+In this section we will dive a bit deeper in the model evaluation.
+
+#### Overall Evaluation
+
+We can extract the main model explanation features using the `h2o.explain` function.
+
+```{r}
+exm_train <- h2o::h2o.explain(finMod, train_h2o)
+exm_test  <- h2o::h2o.explain(finMod, test_h2o)
+```
+
+We will first have a look at the confusion matrix.
+
+```{r}
+exm_train$confusion_matrix
 ```
 
 ```{r}
-summary(objModel)
+exm_test$confusion_matrix
 ```
 
-### Train
+We can see that the confusion matrices look very similar (and pretty good as well)
+
+Next we take a look at the variable importance.
 
 ```{r}
-trainDF$pred       <- predict(object = objModel, trainDF, type = "prob")$yes
-trainDF$pred_class <- predict(object = objModel, trainDF, type = "raw")
+plotly::subplot(exm_train$varimp$plots[[1]] %>% ggplotly(), exm_test$varimp$plots[[1]] %>% ggplotly(), nrows = 1)
+```
+
+We can see that the variable importance is the same for the train and test set. With the tweet polarity being the most important feature. It is worth mentioning that the `avePrice` ranks third in the variable importance, suggesting that price is a key factor to the retention. This is an important fact to mention since we will be focussing on this later on in a sensitivity study.
+
+We will also take a look at the SHAP values.
+
+```{r}
+plotly::subplot(exm_train$shap_summary$plots[[1]] %>% ggplotly(), exm_test$shap_summary$plots[[1]] %>% ggplotly(), nrows = 1)
+```
+
+There are some slight differences, but in general the SHAP values are similar as well.
+
+Our final set of plots are the PDP plots.
+
+```{r}
+plotly::subplot(exm_train$pdp$plots$pol_med %>% ggplotly(), exm_test$pdp$plots$pol_med %>% ggplotly(), nrows = 1)
+```
+
+A clear result from the model is that the worse the tweet polarity is, the less likely a retention will be. On the contrary the higher the tweet polarity is the more likely we are to retain a customer.
+
+```{r}
+plotly::subplot(exm_train$pdp$plots$avePrice %>% ggplotly(), exm_test$pdp$plots$avePrice %>% ggplotly(), nrows = 1)
+```
+
+As we can expect, the lower the average price per participant in the group, the more likely we are to retain.
+
+```{r}
+plotly::subplot(exm_train$pdp$plots$Group_State %>% ggplotly(), exm_test$pdp$plots$Group_State %>% ggplotly(), nrows = 1)
+```
+
+Here we can see that there are some states where the model accurately predicts lower/higher retention that other states.
+
+We can see from the PDP plots that the variables behave the same in the train and test sets.
+
+#### Train
+
+In this section we will validate our model outside the h2o environment.
+
+```{r}
+trainDF <- trainDF %>%
+  mutate(pred       = h2o::h2o.predict(object = finMod, newdata = train_h2o) %>% as_tibble() %>% pull(yes),
+         pred_class = ifelse(pred >= finThresh, "yes", "no"))
 
 liftDatTrain <- data.frame(obs = as.numeric(trainDF$Retained), pred = trainDF$pred) %>%
   arrange(-pred) %>%
@@ -4199,7 +5019,8 @@ liftDatTrain <- data.frame(obs = as.numeric(trainDF$Retained), pred = trainDF$pr
          n       = 100 * (1:nrow(.))/nrow(.))
 
 f1_Train  <- MLmetrics::F1_Score(y_pred = trainDF %>% pull(pred_class), 
-                                 y_true = trainDF %>% pull(Retained_class))
+                                 y_true = trainDF %>% pull(Retained_class), 
+                                 positive = "yes")
 acc_Train <- MLmetrics::Accuracy(y_pred = trainDF %>% pull(pred_class), 
                                  y_true = trainDF %>% pull(Retained_class))
 auc_Train <- MLmetrics::AUC(y_pred = trainDF %>% pull(pred), 
@@ -4213,7 +5034,7 @@ liftDatTrain %>%
                  yaxis = list(title = "Observed/Predicted")) %>%
   plotly::add_annotations(x         = 20,
                           y         = 1500,
-                          text      = paste0("F1 Score = ", F1Train %>% round(digits = 4)),
+                          text      = paste0("F1 Score = ", f1_Train %>% round(digits = 4)),
                           showarrow = FALSE) %>%
   plotly::add_annotations(x         = 20,
                           y         = 1400,
@@ -4221,7 +5042,7 @@ liftDatTrain %>%
                           showarrow = FALSE) %>%
   plotly::add_annotations(x         = 20,
                           y         = 1300,
-                          text      = paste0("AUC = ", aucTrain %>% round(digits = 4)),
+                          text      = paste0("AUC = ", auc_Train %>% round(digits = 4)),
                           showarrow = FALSE)
 ```
 
@@ -4233,11 +5054,16 @@ pROC::roc(trainDF %>% pull(Retained), trainDF %>% pull(pred))
 plot(pROC::roc(trainDF %>% pull(Retained), trainDF %>% pull(pred)))
 ```
 
-### Test
+From this, we can confirm that the training KPIs are calculated correctly and from the lift plot that the model is behaving very well.
+
+#### Test
+
+We will take a look at the test set in the same way as we did for the train set.
 
 ```{r}
-testDF$pred       <- predict(object = objModel, testDF, type = "prob")$yes
-testDF$pred_class <- predict(object = objModel, testDF, type = "raw")
+testDF <- testDF %>%
+  mutate(pred       = h2o::h2o.predict(object = finMod, newdata = test_h2o) %>% as_tibble() %>% pull(yes),
+         pred_class = ifelse(pred >= finThresh, "yes", "no"))
 
 liftDatTest <- data.frame(obs = as.numeric(testDF$Retained), pred = testDF$pred) %>%
   arrange(-pred) %>%
@@ -4247,7 +5073,8 @@ liftDatTest <- data.frame(obs = as.numeric(testDF$Retained), pred = testDF$pred)
          n       = 100 * (1:nrow(.))/nrow(.))
 
 f1_Test  <- MLmetrics::F1_Score(y_pred = testDF %>% pull(pred_class),
-                                y_true = testDF %>% pull(Retained_class))
+                                y_true = testDF %>% pull(Retained_class), 
+                                 positive = "yes")
 acc_Test <- MLmetrics::Accuracy(y_pred = testDF %>% pull(pred_class),
                                 y_true = testDF %>% pull(Retained_class))
 auc_Test <- MLmetrics::AUC(y_pred = testDF %>% pull(pred),
@@ -4281,27 +5108,41 @@ pROC::roc(testDF %>% pull(Retained), testDF %>% pull(pred))
 plot(pROC::roc(testDF %>% pull(Retained), testDF %>% pull(pred)))
 ```
 
-## Inspection
+And indeed here we can see again that the selected model performed in line with the previous seen KPIs. The from the lift curve that we see we can also feel assured that our model is performing very well.
 
-## By Variable
+We do have some reason to suspect a bit of over-fitting, however with the similarity between all 3 model evaluation metrics and the great performance on the test set, we are comfortable that the model generalize sufficiently well.
 
-### pol_mean
+## Inspection {.tabset .tabset-fade}
+
+In this section we will take a look at how the model performs by considering some variables as well as individual observations.
+
+### By Variable {.tabset .tabset-fade}
+
+#### pol_mean
+
+The most important variable is show here on the **test set**.
 
 ```{r}
-plt <- plotTarget(datIn = testDF, var_inspect = "pol_mean", target = "Retained", predVar = "pred",
+plt <- plotTarget(datIn = testDF, var_inspect = "pol_med", target = "Retained", predVar = "pred",
                   numvar = TRUE, numVarBreaks = seq(-2,2,0.1),
                   autoBin = F)
 plt$plt
 ```
 
+And here on the **train set**.
+
 ```{r}
-plt <- plotTarget(datIn = trainDF, var_inspect = "pol_mean", target = "Retained", predVar = "pred",
+plt <- plotTarget(datIn = trainDF, var_inspect = "pol_med", target = "Retained", predVar = "pred",
                   numvar = TRUE, numVarBreaks = seq(-2,2,0.1),
                   autoBin = F)
 plt$plt
 ```
+
+We can tell from this that the model is performing very well on this variable for both the test and train sets. Naturally it performs slightly better on the train set.
 
 ### Program_Code
+
+Next, we will look at the program code on the **test set**.
 
 ```{r}
 plt <- plotTarget(datIn = testDF, var_inspect = "Program_Code", target = "Retained", predVar = "pred",
@@ -4310,9 +5151,399 @@ plt <- plotTarget(datIn = testDF, var_inspect = "Program_Code", target = "Retain
 plt$plt
 ```
 
+And on the **train set**.
+
 ```{r}
 plt <- plotTarget(datIn = trainDF, var_inspect = "Program_Code", target = "Retained", predVar = "pred",
                   numvar = F,
                   autoBin = F)
 plt$plt
 ```
+
+Clearly again, find a good overall performance for this variable on both train and test set.
+
+### avePrice
+
+Next, we will look at the average price per participant on the **test set**.
+
+```{r}
+plt <- plotTarget(datIn = testDF, var_inspect = "avePrice", target = "Retained", predVar = "pred",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+And on the **train set**.
+
+```{r}
+plt <- plotTarget(datIn = trainDF, var_inspect = "avePrice", target = "Retained", predVar = "pred",
+                  numvar = T,
+                  autoBin = F)
+plt$plt
+```
+
+Clearly again, find a good overall performance for this variable on both train and test set.
+
+### SchoolGradeTypeHigh
+
+Next, we will look at the an unimportant feature, the `SchoolGradeTypeHigh` on the **test set**.
+
+```{r}
+plt <- plotTarget(datIn = testDF, var_inspect = "SchoolGradeTypeHigh", target = "Retained", predVar = "pred",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+And on the **train set**.
+
+```{r}
+plt <- plotTarget(datIn = trainDF, var_inspect = "SchoolGradeTypeHigh", target = "Retained", predVar = "pred",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+Clearly again, find a good overall performance for this variable on both train and test set. Even on features not deemed important by the model.
+
+## By Observation {.tabset .tabset-fade}
+
+In this section we will take a look at individual predictions, explaining why the prediction
+
+### Low Retention
+
+First we find an observation with a low predicted retention.
+
+```{r}
+lr <- h2o::h2o.explain_row(finMod, test_h2o, row_index = which(testDF$pred==min(testDF$pred)))
+```
+
+Let's see what the outcome and prediction is for this observation :
+
+```{r}
+testDF %>% filter(pred == min(pred)) %>% select(pred, Retained, pred_class)
+```
+
+Clearly the model got this one spot on! We can take a look at the contribution of the different variables to the prediction by considering the SHAP plot.
+
+```{r}
+lr$shap_explain_row$plots[[1]] %>% ggplotly()
+```
+
+Here we can see that the main contributors to the low probability is the **pol_med** which equal `-2` and the **sub_med** equalling `2.14`. There exist some positive contributors as well, the **Income_Level** `M` and the **SPR_Product_Type** `Science`.
+
+We can also take a look at some ICE plots, to further understand the prediction.
+
+```{r}
+plotly::subplot(lr$ice$plots$pol_med %>% ggplotly(), lr$ice$plots$avePrice %>% ggplotly(), lr$ice$plots$Income_Level %>% ggplotly(), nrows = 1)
+```
+
+The dotted line shows where the observation lies, hence it is clear to see, we can clearly see that the contribution of each variable adds to the reason why this individual was predicted to not being retained.
+
+Here we can see that that the prediction make complete sense when considering the contributing.
+
+### Unsure Retention
+
+First we find an observation with a mid-range predicted retention.
+
+```{r}
+mr <- h2o::h2o.explain_row(finMod, test_h2o, row_index = which(testDF$pred > finThresh*0.99 & testDF$pred < finThresh*1.01)[1])
+```
+
+Let's see what the outcome and prediction is for this observation :
+
+```{r}
+testDF[which(testDF$pred > finThresh*0.99 & testDF$pred < finThresh*1.01)[1], ] %>% select(pred, Retained, pred_class)
+```
+
+And again the model made the right decision. However, don't be fooled, this was by all means quite lucky. The prediction threshold is :
+
+```{r}
+finThresh
+```
+
+So we can see that as the model prediction is just `0.3%` different from the threshold, this could easily have been classified as a retained customer as well. Let's dig a bit deeper.
+
+```{r}
+mr$shap_explain_row$plots[[1]] %>% ggplotly()
+```
+
+Here we can see that the main contributors to this prediction is the **MajorProgramCode** and the **pol_med** on the negative side. However, there are a number of positive contributors **Income_Level**, **sub_med** and **Group_State** are some examples.
+
+We can also take a look at some ICE plots again, to further understand the prediction.
+
+```{r}
+plotly::subplot(mr$ice$plots$pol_med %>% ggplotly(), mr$ice$plots$avePrice %>% ggplotly(), mr$ice$plots$Income_Level %>% ggplotly(), nrows = 1)
+```
+
+Here we can see that that the prediction make complete sense when considering the contributing.As none of these levels give clear confidence whether it should be retained or not.
+
+### High Retention
+
+First we find an observation with a high predicted retention.
+
+```{r}
+hr <- h2o::h2o.explain_row(finMod, test_h2o, row_index = which(testDF$pred==max(testDF$pred)))
+```
+
+Let's see what the outcome and prediction is for this observation :
+
+```{r}
+testDF %>% filter(pred == max(pred)) %>% select(pred, Retained, pred_class)
+```
+
+Clearly the model got this one spot on! We can take a look at the contribution of the different variables to the prediction by considering the SHAP plot.
+
+```{r}
+hr$shap_explain_row$plots[[1]] %>% ggplotly()
+```
+
+Here we can see that the main contributors to the high probability is the **pol_med** and **Income_Level**. There exist some positive contributors as well, the **MajorProgramCode** and the **sub_med**.
+
+We can also take a look at some ICE plots, to further understand the prediction.
+
+```{r}
+plotly::subplot(hr$ice$plots$pol_med %>% ggplotly(), hr$ice$plots$Income_Level %>% ggplotly(), hr$ice$plots$avePrice %>% ggplotly(), nrows = 1)
+```
+
+Here we can see that that the prediction make complete sense when considering the contributing.
+
+# Business Case {.tabset .tabset-fade}
+
+Before we address our business case and proposed strategies, we would like to highlight a key principle that goes beyond retention. This is the Customer Lifetime Value (CLV), the CLV is a target, not necessarily the retention. If we invest too much in retaining unprofitable clients (sending gifts, calling, offering discount) does this really matter if in the end they are retained but we suffered a net loss? With that said, there is obviously a balance that needs to be drawn somewhere and of course if we can do something to retain our customer cost effectively, we should. It is also commonly known that it is generally much cheaper to retaining a customer than to acquire a new one.
+
+Our approach lead us to a three-prong business strategy.
+
+1. Social media presence 
+  + As we have seen from a descriptive and modelling perspective, the tweet polarity is by far the most significant contributing factor to determine whether a customer will be retained or not.
+2. New business a target segment
+  + There exists a highly desirable customer segment that we have identified as a focal point for future marketing
+3. Improved product offering
+  + Some customers have been offered products beyond their capacity, by improving our product offering we can improve retention
+
+In the next section, we will provide support for these three items.
+
+We will list our assumptions taken where relevant. To start with a few assumptions:
+
+1. An overall profit margin of 5% of the total group, this is important as it will serve us with a sort of "reserve" which we can allocate on an individual level to ascertain how much we can "spend" on them to retain them before they become unprofitable. In reality we should be able to find this exact figure and simply adjust our assumption with that fixed/variable amount. 
+2. We will also consider all of the clients are eligible to be retained in the future.
+3. The trip prices does not evolve.
+
+## Social Media Presence 
+
+We assess the social media opinion by considering the polarity of a tweet, this is whether a customer is either happy or unhappy about our service.
+
+We will start this off with a small refresher of what the impact of the median polarity of all tweets from a customer is.
+
+```{r}
+finDF <- trainDF %>% bind_rows(testDF)
+plt <- plotTarget(datIn = finDF, var_inspect = "pol_med", target = "Retained", predVar = "pred",
+                  numvar = T, numVarBreaks = seq(-1, 1, 0.1),
+                  autoBin = F)
+plt$plt
+```
+
+Clearly, if a customer tweets something negatively, the likelihood of retention is nearly `0` and as indicted from the model outputs this is the key feature that drives retention. First of all, we know that there are some individual where we are beyond redemption, even if we were to offer them a 90% discount they will very likely still not be interested in using our service again. It would be completely unwise to pursue these lost cases as there is simply nothing we can do to win them back. Our focus should be focussed on those that we can influence.
+
+The first action is to use a bot to control the company's twitter account. This bot will identify the polarity of tweets that tagged the company, once tagged and identified as a positive or negative tweet, the bot will have a sample of standard tweets and post them as a response. This should seem to be as human as possible as it will show that the company is actively reaching out and trying to respond to their clients, either by saying things like *"we are sorry to hear that you had a bad experience with us, we will take you feedback into account and try our best to improve in the future"* or *"We are glad to hear you enjoyed your trip with us, see you next time!"*. It is also completely possible to have a human (or a team of human) manually respond, however depending on the number of tweets, it might not be feasible. The cost of a bot should be minimal, as it can be built in-house by a great team of Data Scientists!
+
+The second action is to identify the *"swing votes"* some customers who sent a negative tweet still might have a relatively good likelihood of being retained, in these cases, we can manually reach out to them and try to resolve the issue, offering them discounts or a small refund to try to sway them to come back next year. In the last action, we will look at how we can spend that "reserve" as we mentioned before to find the correct customers to win over and what we can offer them. This is even more important when considering high-value customers, for instance, we might even consider taking a financial loss in a particular year to ensure the retention of a future valuable customer.
+
+## New Business Target Segment
+
+For our second action, we identified our new business segment as *High Income* AND *Large Groups*.
+
+There is absolutely nothing revolutionary about this as it makes complete sense to taret wealthy and large groups of individuals, but it remains a key segment both in terms of volume written and retention.
+
+```{r}
+plt <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt_a <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue",
+                  numvar = F,
+                  autoBin = F)
+plt_b <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue", var_expo = "SPR_Group_Revenue",
+                  numvar = F,
+                  autoBin = F)
+plotly::subplot(plt_a$plt, plt_b$plt, nrows = 1)
+```
+
+As we can see from the plots above, the higher income groups tend to be retained, additionally the higher income groups have both a higher average revenue per group (plot on the left) and total volume in terms of revenue (plot on the the right - the bars). 
+
+```{r}
+plt <- plotTarget(datIn = finDF, var_inspect = "Total_Pax", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-10,500,1),
+                  autoBin = F)
+plt$plt
+```
+
+From this plot it is also clear that the larger the travel group, the more likely it is that they will retain. As we can see the retention probability flattens out around 30 participants. What we recommend is aiming for this level, building offers and discounting larger groups in order to attract more passengers.
+
+If possible, we would also suggest merging schools together so that total group exceeds 30 passengers. We think this is related to *"the more the merrier"*, meaning the more people on the trip the more fun it is. 
+
+## Improved Customer Offering {.tabset .tabset-fade}
+
+For the customer offering, we identified two opportunities. The first is that we would propose that the company offers the correct program code to the correct income class. This assumes that it is possible to offer any program code to any customer - we do not have this constraint as additional information, so it seems reasonable to assume it.
+
+The second opportunity we identified is to offer customers with an individual reduced rate, such that they will be retained at a reduced price point.
+
+### Correct Program Offer
+
+With the limited amount of information we have, assuming that all Product Codes are available for each each customer, we noticed that the low income groups have been offered the wrong programs. Consider the following plot :
+
+```{r}
+plt <- plotTarget(datIn = rbind(trainDF, testDF) %>% filter(Income_Level%in%c("A","B","C","D","E","F","G","H")), var_inspect = "Program_Code", target = "SPR_Group_Revenue",
+                  numvar = F, 
+                  autoBin = F)
+plt$plt
+```
+
+What we see here is only *low income* customers (income level A-H), and we can see that for the different program codes they are attending quite expensive programs. Instead, we would suggest that they should go on the cheapest program, which is *HS*.
+
+We can test the impact this will have on the portfolio if all *low income* groups were indeed to go on program code *HS*. Additionally, we impute the `SPR_Group_Revenue` with the median value.
+
+```{r}
+finDF <- trainDF %>% bind_rows(testDF)
+
+print(paste0("Predicted : ", finDF$pred %>% mean() %>% round(3), " | Observed : ", finDF$Retained %>% mean() %>% round(3)))
+```
+
+To start off with, we can see that the overall model prediction is very close to the observed average retention.
+
+```{r}
+finDF_baked <- recipes::prep(blueprint, training = trainDF) %>% recipes::bake(new_data = finDF %>% 
+                                                                                mutate(
+                                                                                    Program_Code      = if_else(Income_Level %in% c("A", "B", "C", "D", "E", "F", "G", "H"), "HS", Income_Level)
+                                                                                  , SPR_Group_Revenue = if_else(Income_Level %in% c("A", "B", "C", "D", "E", "F", "G", "H"), finDF$SPR_Group_Revenue[finDF$Program_Code=="HS"] %>% median(), SPR_Group_Revenue)
+                                                                                  , avePrice          = as.numeric(SPR_Group_Revenue)/Total_Pax
+                                                                                  )
+                                                                              )
+fin_h2o <- finDF_baked %>% h2o::as.h2o()
+
+pred <- h2o::h2o.predict(object = finMod, newdata = fin_h2o) %>% as_tibble() %>% pull(yes)
+
+pred %>% mean()
+```
+
+Here we can see that indeed if all the lower income segments were to have attended a more affordable program, the overall portfolio retention would have increased by nearly 2%. Or in terms of revenue :
+
+```{r}
+print(paste0("Proportion : ", sum(finDF$SPR_Group_Revenue*pred)/sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3), " | Absolute : ", sum(finDF$SPR_Group_Revenue*pred)-sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3)))
+```
+
+This states that it would have resulted in more than 4% or 162K USD increase in total revenue.
+
+We conclude that there is a need to better offer the most appropriate product to the correct customer.
+
+### Portfolio Optimization
+
+For the optimization problem, we will consider optimizing over a single year. The overall idea, is using the profit margin of 5% to control whether at what level of discount we can offer customers to increase their probability of retentions, such that at the new revenue the customer is more profitable.
+
+We can back-test this strategy by applying a lower `SPR_Group_Revenue` over a few iterations and assessing which discount yields the optimal return.
+
+```{r}
+finDF <- trainDF %>%
+  bind_rows(testDF) %>% 
+  mutate(profitMargin = SPR_Group_Revenue*0.05)
+
+finDF_loop <- trainDF %>% bind_rows(testDF) 
+
+optimDF <- tibble(
+    SPR_Group_Revenue_1 = rep(NA, nrow(finDF))
+  , pred_1              = rep(NA, nrow(finDF))
+  , SPR_Group_Revenue_2 = rep(NA, nrow(finDF))
+  , pred_2              = rep(NA, nrow(finDF))
+  , SPR_Group_Revenue_3 = rep(NA, nrow(finDF))
+  , pred_3              = rep(NA, nrow(finDF))
+  , SPR_Group_Revenue_4 = rep(NA, nrow(finDF))
+  , pred_4              = rep(NA, nrow(finDF))
+  , SPR_Group_Revenue_5 = rep(NA, nrow(finDF))
+  , pred_5              = rep(NA, nrow(finDF))
+)
+
+for (ii in 1:5) {
+  discount <- 0.01*ii
+  
+  finDF_baked <- recipes::prep(blueprint, training = trainDF) %>% recipes::bake(new_data = finDF_loop %>% mutate(SPR_Group_Revenue = SPR_Group_Revenue*(1-discount),
+                                                                                                                 avePrice          = as.numeric(SPR_Group_Revenue)/Total_Pax))
+  fin_h2o <- finDF_baked %>% h2o::as.h2o()
+  
+  optimDF[[which(names(optimDF) == paste0("SPR_Group_Revenue_", ii))]] <- finDF_loop %>% mutate(SPR_Group_Revenue = SPR_Group_Revenue*(1-discount)) %>% pull(SPR_Group_Revenue)
+  optimDF[[which(names(optimDF) == paste0("pred_", ii))]] <- h2o::h2o.predict(object = finMod, newdata = fin_h2o) %>% as_tibble() %>% pull(yes)
+ 
+}
+
+finDF <- finDF %>% bind_cols(optimDF)
+finDF <- finDF %>% mutate(
+    profit_1   = SPR_Group_Revenue_1*0.05
+  , profit_2   = SPR_Group_Revenue_2*0.05
+  , profit_3   = SPR_Group_Revenue_3*0.05
+  , profit_4   = SPR_Group_Revenue_4*0.05
+  , profit_5   = SPR_Group_Revenue_5*0.05
+  , e_profit   = profitMargin*pred
+  , e_profit_1 = profit_1*pred_1
+  , e_profit_2 = profit_2*pred_2
+  , e_profit_3 = profit_3*pred_3
+  , e_profit_4 = profit_4*pred_4
+  , e_profit_5 = profit_5*pred_5
+  , maxProfit  = pmax(e_profit, e_profit_1, e_profit_2, e_profit_3, e_profit_4, e_profit_5)
+  )
+
+(finDF$maxProfit %>% sum())/(finDF$e_profit %>% sum())
+```
+
+Here we can see an unfortunately low impact, by applying this strategy we find an overall increase of 0.1378% increase in the expected profit. This translates to :
+
+```{r}
+finDF$maxProfit %>% sum()-finDF$e_profit %>% sum()
+```
+
+A small 268.92$ increased overall expected profit.
+
+The fact that the increase is so small might be deemed as insignificant, but just to illustrate the impact we will take a look at the largest difference between the original expected profit and the revised profit :
+
+```{r}
+finDF %>%
+  mutate(diff = maxProfit - e_profit) %>% 
+  filter(diff == max(diff)) %>% 
+  select(pred, pred_1, profitMargin, profit_1, e_profit, e_profit_1)
+```
+
+Here we can see that the impact for this individual is big. Opting to reducing the revenue with 1% leads to a 12% increase in retention probability and an 11.68% increase in the expected profit.
+
+Given the assumption we worked under, there might be a chance to have a further impact on the retention and overall profitability if we had the actual profit margins.
+
+# Conclusion
+
+We started the analysis by cleaning and combining all the data. We then performed an EDA on all variables, ensuring they were properly treated and created some new features to further try to improve our models.
+
+During the process above we also performed sentiment analysis on the twitter data to further enrich our modelling dataset.
+
+After the dataset was clean and ready for modelling we performed some pre-processing steps, these include; removing correlated variables, near-zero variance variables and PCA to impute missing values.
+
+Then we modelled the data using a large amount of models (more than 1000 models) and tested all of them. Then we inspected each mode and came up with a business case based on these results.
+
+The business case conclusion is sound, backed up by the model and observed data. We provide the company with a number of low-risk, high-return strategies.
+
+```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("3_misc/groupLogo.PNG")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

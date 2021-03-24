@@ -32,7 +32,7 @@ opts_knit$set(width = 75)
 
 # Introduction {.tabset .tabset-fade}
 
-For this project we are given a number of datasets; **sales**, **crm**, **finance** and **twitter** data. From these datasets, we will need to analyse the data and build a model that can accurately predict which customers are most likely to churn.
+For this project we are given a number of datasets; **sales**, **crm**, **finance** and **twitter** data. From these datasets, we will need to analyse the data and build a model that can accurately predict which customers are most likely to churn. We perform this modelling and prediction excersice since if we know in advance which customers are more likely to leave us, we can perform actions in order to prevent them from leaving us in a cost-efficient way.
 
 The project is structured as follows :
 
@@ -41,9 +41,17 @@ The project is structured as follows :
 3. Perform and Exploratory Data Analysis
 4. Build various models and inspect these to find the winning solution
 
-Once these steps are complete we provide an overall conclusion, based on the data provided.
+Once these steps are complete we provide business case strategies and an overall conclusion, based on the data provided.
 
-One of the challenges for our team was that we were skilled in both R and Python. To overcome this obstacle, we used RStudio and specifically a package called `reticulate` from R which allows us to run Python code directly from within R. This allowed the team to easily collaborate and learn from each other.
+One of the challenges for our team was that we were skilled in both **R** and **Python**. To overcome this obstacle, we used **RStudio** and specifically a package called `reticulate` from **R** which allows us to run **Python** code directly from within **R**. This allowed the team to easily collaborate and learn from each other.
+
+Speaking of the team, this is who we are :
+
+```{r fig.show = "hold", out.width = "100%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("3_misc/team.PNG")
+```
+
+**PLEASE NOTE** you can click on the little **CODE** button (at the top right of the report) and then click on **Show All** to display the code that results in the output. We also found that the report might be slow to load on some pages, please be patient and give it a few seconds to load as the report is quite large.
 
 ```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
 knitr::include_graphics("3_misc/groupLogo.PNG")
@@ -165,7 +173,7 @@ propFunc(datIn = mtcars, vars = names(mtcars), totToReturn = 3, asDF = TRUE) %>%
   kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
 ```
 
-The first variable always shows the missing values in per variable (as shown per row). Then the second variable and from there on shows the levels as well as their proportions ranked from most frequent to least, hence for the variable (row) `cyl` we see that having $8$ cylinders is most common and it represents $43.75$% of all observations. Since we asked for only 3 variables to be returned (including NA, hence only 2) we see in the column `RestCount` that there is $1$ other level not shown. The column `Rest` is the proportion of other variables not shown, hence as we know there are a total of $3$ levels for the variable `cyl` and $1$ of them isn't shown, hence $33.3$% of the levels are not shown.
+The first variable always shows the missing values in per variable (as shown per row). Then the second variable and from there on shows the levels as well as their proportions ranked from most frequent to least, hence for the variable (row) `cyl` we see that having $8$ cylinders is most common and it represents $43.75\%$ of all observations. Since we asked for only 3 variables to be returned (including NA, hence only 2) we see in the column `RestCount` that there is $1$ other level not shown. The column `Rest` is the proportion of other variables not shown, hence as we know there are a total of $3$ levels for the variable `cyl` and $1$ of them isn't shown, hence $33.3\%$ of the levels are not shown.
 
 This function allows us to very quickly get a deep insight in our data by identifying 2 main concerns :
 
@@ -584,6 +592,10 @@ plt.axis('off')
 plt.show()
 ```
 
+```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("3_misc/wordcloud.png")
+```
+
 ## LSA
 
 LSA (Latent Semantic Analysis) : it assumes that words that are close in meaning will occur in similar pieces of text
@@ -696,7 +708,7 @@ dim(salesDat)
 ```
 <br>
 
-Here we can see we have `4153` observations and `24` variables.
+Here we can see we have $4153$ observations and $24$ variables.
 
 ```{r}
 set.seed(2021)
@@ -725,7 +737,7 @@ dim(crmDat)
 ```
 <br>
 
-What we can see here as a first observation is that the number of observations is `5` less than the sales data. Let's take a look at a sample of the data.
+What we can see here as a first observation is that the number of observations is $5$ less than the sales data. Let's take a look at a sample of the data.
 
 ```{r}
 set.seed(2021)
@@ -734,7 +746,7 @@ crmDat %>% sample_n(., 10) %>%
 ```
 <br>
 
-Looking at the data, and trying to establish some link to the sales data, it seems that the ID is the only natural link, however, it clearly doesn't properly link the 2 tables :
+Looking at the data, and trying to establish some link to the sales data, it seems that the ID is the only natural link, however, it clearly doesn't properly link the two tables :
 
 ```{r}
 salesDat %>% 
@@ -771,9 +783,9 @@ salesDat %>% filter(id_travType != Travel_Type) %>%
 ```
 <br>
 
-So we can see that the `Pogram_Code` is always the first part of the `ID_SALES` and indeed the `Travel_Type` is almost always the end (except for the 3 cases above).
+So we can see that the `Pogram_Code` is always the first part of the `ID_SALES` and indeed the `Travel_Type` is almost always the end (except for the $3$ cases above).
 
-We should flag these 3 cases out from the sales data since the "true ID" might, for example, either be `1211` or `12110`.
+We should flag these $3$ cases out from the sales data since the *"true ID"* might, for example, either be $1211$ or $12110$.
 
 Next we will see whether these `id_actual`'s are indeed unique or not :
 
@@ -795,7 +807,7 @@ crmDat %>% sample_n(., 10) %>%
 ```
 <br>
 
-Here we can spot that the `ID_CRM` is made up of `Poverty_Code` + `ID` + `Income_Level`. Let's see if we split up the `ID_CRM` in these 3 parts if we can reconcile the components and get the original `ID` back :
+Here we can spot that the `ID_CRM` is made up of `Poverty_Code` + `ID` + `Income_Level`. Let's see if we split up the `ID_CRM` in these $3$ parts if we can reconcile the components and get the original `ID` back :
 
 ```{r}
 crmDat <- crmDat %>% 
@@ -841,9 +853,9 @@ sales_crm %>% dplyr::filter(is.na(fromCRM)) %>%
 ```
 <br>
 
-Here we only find `5` observations that does not merge back with the Sales data. This is to be expected since the CRM data has `5` rows less than the sales data.
+Here we only find $5$ observations that does not merge back with the Sales data. This is to be expected since the CRM data has $5$ rows less than the sales data.
 
-Since we have the Sales and CRM data captured in a single dataset called `sales_crm`, we can now remove the 2 original datasets.
+Since we have the Sales and CRM data captured in a single dataset called `sales_crm`, we can now remove the two original datasets.
 
 ```{r}
 sales_crm <- sales_crm %>% select(-c(ID_CRM, fromCRM))
@@ -923,7 +935,7 @@ fin_sales_crm %>% dplyr::filter(is.na(fromFIN)) %>%
 ```
 <br>
 
-From this we find `5` observations that does not merge back with the Sales/CRM data. we would expect `2` claims to be missing as the natural consequence that the financial data has `2` observations less than the original sales data. This leaves us with `3` observations from the financial data these does not merge with the Sales/CRM. Looking at the bigger picture this is a miss-match of $3/4153 = 0.00072$ which is $0.072\%$. 
+From this we find $5$ observations that does not merge back with the Sales/CRM data. we would expect $2$ claims to be missing as the natural consequence that the financial data has $2$ observations less than the original sales data. This leaves us with $3$ observations from the financial data these does not merge with the **Sales/CRM**. Looking at the bigger picture this is a miss-match of $3/4153 = 0.00072$ which is $0.072\%$. 
 
 We can clean up the workspace by removing the previous datasets no longer needed.
 
@@ -934,7 +946,7 @@ rm(finDat, sales_crm)
 
 ## Twitter Data {.tabset .tabset-fade}
 
-The twitter data is significantly different from the rest, except in one way, the merge is straightforward. Let's take a look at the dimention and a sample of the twitter data.
+The twitter data is significantly different from the rest, except in one way, the merge is straightforward. Let's take a look at the dimension and a sample of the twitter data.
 
 ```{r}
 dim(twiter)
@@ -1040,6 +1052,7 @@ We will first take a quick global overview of what the data looks like :
 ```{r}
 finDat %>% glimpse()
 ```
+<br>
 
 If we take a slightly deeper look at each variable using our custom function we find :
 
@@ -1047,8 +1060,9 @@ If we take a slightly deeper look at each variable using our custom function we 
 propFunc(datIn = finDat, vars = names(finDat), totToReturn = 10, asDF = TRUE) %>% 
   kableExtra::kable(format = "html") %>% kableExtra::kable_styling("striped") %>% kableExtra::scroll_box(width = "100%")
 ```
+<br>
 
-What we can gather from the results above are that there are a few variables that could be ignored, for instance `DepartureMonth` as it is 99.61% of the time **January**, clearly this is a mistake in the raw data and we can correct this feature by extracting the correct Departure Month from the `Departure_Date`. We can also see that the date formate for the variables are `mm/dd/yyyy` and that there are numeric variables that should be correctly parsed by replacing the `,` with a `.`. There are a few other things we noticed, but will dive into them more in detail when we study each variable one at a time.
+What we can gather from the results above are that there are a few variables that could be ignored, for instance `DepartureMonth` as it is $99.61\%$ of the time **January**, clearly this is a mistake in the raw data and we can correct this feature by extracting the correct Departure Month from the `Departure_Date`. We can also see that the date formate for the variables are `mm/dd/yyyy` and that there are numeric variables that should be correctly parsed by replacing the `,` with a `.`. There are a few other things we noticed, but will dive into them more in detail when we study each variable one at a time.
 
 From this we also know that the variables can be split into 3 broad types :
 
@@ -1090,7 +1104,7 @@ plt$plt
 
 Clearly this grouping seems a lot more reasonable that what we have observed before.
 
-##### Missing Values
+#### Missing Values
 
 We can also consider how we should treat missing values, however in this case we know that we don't have any.
 
@@ -1199,6 +1213,8 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Group_east_west", target = "Ret
                   autoBin = F)
 plt$plt
 ```
+
+As we can see, the different regions all have different impacts on the retention. We will include all of these features in the modelling framework.
 
 #### Missing Values
 
@@ -1691,7 +1707,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "SPR_Product_Type", target = "Re
 plt$plt
 ```
 
-Here we can see that 3 of the categories are extremely infrequent. We will group these.
+Here we can see that $3$ of the categories are extremely infrequent. We will group these.
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(SPR_Product_Type = if_else(SPR_Product_Type %in% c("International", "IL History", "Costa Rica"), "other", SPR_Product_Type)), var_inspect = "SPR_Product_Type", target = "Retained",
@@ -1811,7 +1827,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(totPax_Diff = FPP + Total_Discount_P
 plt$plt
 ```
 
-Clearly we can see an odd **V** shape that occurs when we plot the difference between the calculated total number of passangers and the provided number. We will add this difference as a feature to the model.
+Clearly we can see an odd **V** shape that occurs when we plot the difference between the calculated total number of passengers and the provided number. We will add this difference as a feature to the model.
 
 #### Missing Values
 
@@ -1913,6 +1929,8 @@ We could also consider ignoring this variable as it is a combination of 2 existi
 
 #### Missing Values
 
+Labelling the `Undefined->Undefined` level as `NA`
+
 ```{r}
 finDat <- finDat %>% mutate(GroupGradeType = ifelse(GroupGradeType == "Undefined->Undefined", NA, GroupGradeType))
 ```
@@ -1942,7 +1960,7 @@ None
 
 Nothing to do
 
-### Retained
+### Retained *
 
 This is the target variable, this indicates whether the customer was retained or not.
 
@@ -1950,7 +1968,24 @@ This is the target variable, this indicates whether the customer was retained or
 finDat$Retained %>% table(useNA = "always") %>% prop.table()
 ```
 
-Here we can see that 61% of all customers are retained. This is good news, since it means that dataset is well-balanced. A naive model will have a prediction accuracy of 61%, giving us a very rough benchmark of what to beat.
+Here we can see that $61\%$ of all customers are retained. This is good news, since it means that dataset is well-balanced. A naive model will have a prediction accuracy of $61\%$, giving us a very rough benchmark of what to beat.
+
+If we translate this naive approach to an F1-score, we can say that we will predict all passangers to retain (since $61\%$ is greater than $50\%$). This translates to an $F1$ of :
+
+```{r}
+naiveF1 <- MLmetrics::Precision(y_pred = (finDat %>% mutate(pred = "yes") %>% pull(pred)),
+                                y_true = (finDat %>% mutate(obs = if_else(Retained == "1", "yes", "no")) %>% pull(obs)),
+                                positive = "yes")
+(2*naiveF1*1)/(naiveF1+1)
+```
+
+Just a small note on this calculateion, since we have $0$ *False Negatives*, the formula for the $F1$ reduce to :
+
+$$F1 = \frac{2*Precision}{Precision+1}$$
+
+Since $Recall=1$. Here we can find that the naive F1-score to beat is $0.756$. If we do not beat this, then our model is worthless.
+
+If we inspect the variable type :
 
 ```{r}
 finDat$Retained %>% class()
@@ -1973,7 +2008,7 @@ finDat <- finDat %>% mutate(Retained       = as.numeric(Retained),
 
 ### Poverty_Code
 
-The poverty code for the school area based on estimated percentage below the poverty line. A is 0 to 5.9, B is 6 to 15.9, C is 16 to 30.9, D is 31 or more. E is unclassified, Space if DISTCLASS = U (Supervisory Union)
+The poverty code for the school area based on estimated percentage below the poverty line. **A** is **0** to **5.9**, **B** is **6** to **15.9**, **C** is **16** to **30.9**, **D** is **31 or more**. **E** is **unclassified**, Space if DISTCLASS = U (Supervisory Union)
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "Poverty_Code", target = "Retained",
@@ -1982,7 +2017,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Poverty_Code", target = "Retain
 plt$plt
 ```
 
-As we can see there are some other levels we wouldn't normally expect. These include `0` and `NA`. Let's group these along with `E` as `other`
+As we can see there are some other levels we wouldn't normally expect. These include **0** and **NA**. Let's group these along with **E** as **other**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Poverty_Code = ifelse(Poverty_Code %in% c("A", "B", "C", "D"), Poverty_Code, "other")), var_inspect = "Poverty_Code", target = "Retained",
@@ -2027,7 +2062,7 @@ We will group all the **other** categories as **other**
 finDat <- finDat %>% mutate(Region = ifelse(Region %in% c("Southern California", "Northern California", "Pacific Northwest", "Houston", "Dallas"), Region, "other"))
 ```
 
-### CRM_Segment *
+### CRM_Segment
 
 CRM code segment (internal code)
 
@@ -2269,9 +2304,9 @@ We will leave the feature as is (numeric) but impute the missing values from the
 finDat <- finDat %>% mutate(FPP_to_School_enrollment = if_else(is.na(FPP_to_School_enrollment) & Total_School_Enrollment > 0 & !is.na(Total_School_Enrollment), FPP/Total_School_Enrollment, FPP_to_School_enrollment))
 ```
 
-### Income_Level
+### Income_Level *
 
-Parent income level code. A is the lowest, Q is the highest and Z is unclassified.
+Parent income level code. **A** is the **lowest**, **Q** is the **highest** and **Z** is **unclassified**.
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retained",
@@ -2280,7 +2315,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retain
 plt$plt
 ```
 
-We can see multiple missing value types, `0`, `NA` and `Z` should all be classed as `other`. We will also group `P` with `P1`, `P3`, `P4` and `P5`.
+We can see multiple missing value types, **0**, **NA** and **Z** should all be classed as **other**. We will also group **P** with **P1**, **P3**, **P4** and **P5**.
 
 ```{r}
 finDat <- finDat %>% mutate(Income_Level = ifelse(Income_Level %in% c("P", "P1", "P3", "P4", "P5"), "P", Income_Level),
@@ -2293,6 +2328,8 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Income_Level", target = "Retain
                   autoBin = F)
 plt$plt
 ```
+
+Here it is very clear that higher income levels are more likely to be retained.
 
 #### Missing Values
 
@@ -2376,7 +2413,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month 
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::month(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
@@ -2385,7 +2422,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::month(lubr
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = getSeason(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
@@ -2396,7 +2433,7 @@ plt$plt
 
 There is no clear evidence of any relationship with retention thus far.
 
-We could also consider the departure day of the week :
+We could also consider the departure **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::wday(lubridate::mdy(FirstMeeting))), var_inspect = "FirstMeeting", target = "Retained",
@@ -2405,7 +2442,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(FirstMeeting = lubridate::wday(lubri
 plt$plt
 ```
 
-There is no clear reason to include the day of week.
+There is no clear reason to include the **day of week**.
 
 #### Missing Values
 
@@ -2432,7 +2469,7 @@ plt$plt
 
 The date could result in a number of interesting features :
 
-Month 
+**Month**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::month(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
@@ -2441,7 +2478,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::month(lubri
 plt$plt
 ```
 
-Season
+**Season**
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = getSeason(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
@@ -2452,7 +2489,7 @@ plt$plt
 
 It seems that there might be a relationship between the last meeting season and the retention.
 
-We could also consider the departure day of the week :
+We could also consider the departure **day of the week** :
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::wday(lubridate::mdy(LastMeeting))), var_inspect = "LastMeeting", target = "Retained",
@@ -2461,7 +2498,7 @@ plt <- plotTarget(datIn = finDat %>% mutate(LastMeeting = lubridate::wday(lubrid
 plt$plt
 ```
 
-We can also see that the day of week have a relationship with the retention.
+We can also see that the **day of week** have a relationship with the retention.
 
 #### Missing Values
 
@@ -2640,7 +2677,7 @@ finDat <- finDat %>% mutate(SchoolGradeType = ifelse(SchoolGradeType == "Undefin
 
 ### SchoolSizeIndicator
 
-Size of the school (S, M, L, S-M, M-L)
+Size of the school (**S**, **M**, **L**, **S-M**, **M-L**)
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "SchoolSizeIndicator", target = "Retained",
@@ -2739,7 +2776,7 @@ plt <- plotTarget(datIn = finDat, var_inspect = "Special_Pay", target = "Retaine
 plt$plt
 ```
 
-We can see that there are both `NA` and `0` as missing values, we will group these as `other`.
+We can see that there are both **NA** and **0** as missing values, we will group these as **other**.
 
 ```{r}
 plt <- plotTarget(datIn = finDat %>% mutate(Special_Pay = ifelse(Special_Pay %in% c("CP", "FR", "SA"), Special_Pay, "other")), var_inspect = "Special_Pay", target = "Retained",
@@ -4166,10 +4203,16 @@ rm(highlyCorDescr)
 
 ### Low Variance
 
-In this section we will remove variables with low or zero variance. The best way to explain this is by example. If a level has 99% of the time the same category and 1% of the time another category then that variable will have a low/near-zero variance.
+In this section we will remove variables with low or zero variance. The best way to explain this is by example. If a level has $99\%$ of the time the same category and $1\%$ of the time another category then that variable will have a low/near-zero variance.
 
 ```{r}
 nzv <- caret::nearZeroVar(finDat, saveMetrics = TRUE) %>% filter(zeroVar == TRUE | nzv == TRUE) 
+nzv
+```
+
+Here we can see the variables that needs to be removed and then remove them.
+
+```{r}
 finDat <- finDat %>% select(-c(rownames(nzv)))
 rm(nzv)
 ```
@@ -4256,15 +4299,17 @@ For the main part of the process, we need to train our model.
 
 We will apply the following strategy :
 
-1. Train various models (glm, nb, svm, gbm and nn)
+1. Train various models (**glm**, **nb**, **svm**, **gbm** and **nn**)
 2. Stack these models
 3. Perform **h2o**'s `h2o::h2o.automl` to train a number of competing models (including stacking)
 
 From the result of all the individual models as well as the stacked and automatically trained models, we will choose a winning model based on the train set.
 
+As mentioned before, we will use **h2o**. The reason for this choise is that it is a library available in both **R** and **Python** - hence we can import models easily across both languages. This library is a well known and established librabry which contains a vast number of model forms. There exists a paid version as well and this confirms the accuracy of the models coded in **h2o**.
+
 ## Data Prep
 
-Here we create the pre-training step, where we will standardize the data. We also create the result data frame that will contain each model results at the end.
+Here we create the pre-training step, where we will standardize the data. We also create the result data frame that will contain each model results at the end. It is worth mentioning that we apply the scaling on the test set as derived by the training data.
 
 ```{r}
 # Make sure we have consistent categorical levels
@@ -4395,7 +4440,7 @@ res %>% filter(!is.na(f1_score))
 res %>% filter(model %in% c("glm"))
 ```
 
-As we can see the resulting GLM produces a good model, not over-fitting with a very high AUC and F1-score.
+As we can see the resulting GLM produces a good model, not over-fitting with a very high **AUC** and **F1-score**.
 
 ## Naive Bayes
 
@@ -4473,7 +4518,6 @@ Clearly the Naive Bayes model does not perform nearly as well as the GLM.
 We will next apply a Support Vector Machine. SVM can be formulated as a quadratic optimization problem.
 
 The two hyper-parameters we will tune is **C** (or in our list `hyper_param`) is a hyper-parameter which is set before the training model and used to control error and **Gamma** is also a hyper-parameter which is set before the training model and used to give curvature weight of the decision boundary.
-
 
 ```{r eval = FALSE}
 # SVM hyperparameters
@@ -4560,7 +4604,7 @@ The next model is a Gradient Boosting Model. Gradient Boosting Machine is a forw
 - **min_rows** - this is the minimum number of observation we would like to have per final node. The smaller the number the more likely you are to over fit
 - **col_sample_rate** and **sample_rate** - these are the row and column sampling parameters. By randomly sampling different rows and columns per tree, we help make the model more generalizable.
 
-We do not add the learning rate or number of trees in the search space, since we opt to enable early stopping and rate annealing. Therefore we keep a sufficiently large amount of trees (so that it will never be reached). Using the early stopping, we will stop training if we don't improve the fit by 1% in the following 10 iterations. Rate annealing, will allow us to speed up the learning at the start (when there is a lot to learn) and the slow it down when there are more to learn. 
+We do not add the learning rate or number of trees in the search space, since we opt to enable early stopping and rate annealing. Therefore we keep a sufficiently large amount of trees (so that it will never be reached). Using the early stopping, we will stop training if we don't improve the fit by $1\%$ in the following 10 iterations. Rate annealing, will allow us to speed up the learning at the start (when there is a lot to learn) and the slow it down when there are more to learn. 
 
 ```{r eval = FALSE}
 gbmParams <- list( 
@@ -4651,7 +4695,7 @@ res %>% filter(!is.na(f1_score))
 res %>% filter(model %in% c("glm", "nb", "svm", "gbm"))
 ```
 
-From what we see, the GBM performs the best on the test set based on the F1 score. The GBM over-fits the data, but it stands as champion.
+From what we see, the GBM performs the best on the test set based on the **F1-score**. The GBM over-fits the data, but it stands as champion.
 
 ## Neural Network
 
@@ -4746,7 +4790,7 @@ It seems that our GLM still remains the leader. The NN does not improve on any K
 
 Now that we have trained all of our models, we will try to outperform the individual winners by stacking them instead. Stacked Ensemble method is a supervised ensemble machine learning algorithm that finds the optimal combination of a collection of prediction algorithms using a process called stacking.
 
-For the stacking we will choose the 3 best models from our GLM, GBM and NN. We exclude the SVM since its performance is significantly lower than the other model forms.
+For the stacking we will choose the 3 best models from our GLM, GBM and NN. We exclude the SVM and NB since its performance is significantly lower than the other model forms.
 
 ```{r eval = FALSE}
 # Train a stacked tree ensemble
@@ -4755,7 +4799,7 @@ ensemble <- h2o::h2o.stackedEnsemble(
   , y                     = Y
   , training_frame        = train_h2o
   , model_id              = "ensemble"
-  , base_models           = append(glmGrid@model_ids[1:3], gbmGrid@model_ids[1:3])
+  , base_models           = append(append(glmGrid@model_ids[1:3], gbmGrid@model_ids[1:3]), nnGrid@model_ids[1:3])
   , metalearner_algorithm = "deeplearning" # drf glm gbm deeplearning
 )
 
@@ -4856,7 +4900,7 @@ We can see that the automated learning did not prove to be very successful.
 
 In the model building process, we trained over 1000 models. The winners chosen was based on the train set only, meaning we still have a lot of models to test on the test set as well.
 
-In this step we will de exactly that. We will calculate the F1 score on both the train and test set for each model trained and then pick the winner.
+In this step we will de exactly that. We will calculate the **F1-score** on both the train and test set for each model trained and then pick the winner.
 
 ```{r eval = FALSE}
 allMods <- h2o::h2o.list_models()
@@ -4886,7 +4930,7 @@ allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
 allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
 ```
 
-From this it is clear that we will choose the model `GBM_grid__1_AutoML_20210323_032348_model_14` since it produced the highest F1 score and there isn't sufficient proof of over fitting. Here is the model parameters :
+From this it is clear that we will choose the model **GBM_grid__1_AutoML_20210323_032348_model_14** since it produced the highest **F1-score** and there isn't sufficient proof of over fitting. Here is the model parameters :
 
 ```{r eval = FALSE}
 finMod    <- h2o::h2o.getModel("GBM_grid__1_AutoML_20210323_032348_model_14")
@@ -4925,13 +4969,13 @@ Here we will take a look at the cross validation summary. we are looking for a g
 finMod@model$cross_validation_metrics_summary
 ```
 
-The result seems good! We can also take a look at some other metrics (dependent on a threshold). Here we will find the max F1 score.
+The result seems good! We can also take a look at some other metrics (dependent on a threshold). Here we will find the max **F1 score**.
 
 ```{r}
 finMod@model$cross_validation_metrics@metrics$max_criteria_and_metric_scores
 ```
 
-Indeed we find a great F1 Score.
+Indeed we find a great **F1 Score**.
 
 #### Train Summary
 
@@ -4941,7 +4985,7 @@ Next we will inspect the overall train results.
 finMod@model$training_metrics@metrics$max_criteria_and_metric_scores
 ```
 
-The F1 score increase somewhat over the entire training space, which is normal.
+The **F1 score** increase somewhat over the entire training space, which is normal since the model is learning across the different folds once combined.
 
 ### In-Depth Evaluation {.tabset .tabset-fade}
 
@@ -4950,6 +4994,8 @@ In this section we will dive a bit deeper in the model evaluation.
 #### Overall Evaluation
 
 We can extract the main model explanation features using the `h2o.explain` function.
+
+We need to provide the training and test datasets to the function, since **h2o** performs permutations based on the provided data to explain the models. Hence if the results across the train and test explanation is consistent, then we have a further comfort in the model that it does not over-fit.
 
 ```{r}
 exm_train <- h2o::h2o.explain(finMod, train_h2o)
@@ -5121,6 +5167,8 @@ We do have some reason to suspect a bit of over-fitting, however with the simila
 In this section we will take a look at how the model performs by considering some variables as well as individual observations.
 
 ### By Variable {.tabset .tabset-fade}
+
+We will inspect the model performance based on a few variables. Hopefully we see that the observed and
 
 #### pol_mean
 
@@ -5312,24 +5360,38 @@ plotly::subplot(hr$ice$plots$pol_med %>% ggplotly(), hr$ice$plots$Income_Level %
 
 Here we can see that that the prediction make complete sense when considering the contributing.
 
+## Final Notes
+
+There are some modelling notes we would like to make.
+
+In addition to what we have done, we tried the following without success :
+
+1. Created other variables that did not add any value (total discount in USD and $\%$ for example). 
+2. Training the models without removing variables or grouping in order to see if we can improve the models further
+3. Training models using other packages (including `scikit-learn`)
+
+Performing all these actions lead to a maximum performance of $0.9323$ on the test set. This model was far more complex and over-fit on the training data. Since this was not significantly better than our selected best model we opted to go with the model presented here.
+
+We believe there is some room for further improvements, such as performing MCA to impute categorical missing values, finding some other features or tuning the models a bit better. However, it will take a considerable amount of time to improve the model we have obtained in the end and we are happy with its performance as-is.
+
 # Business Case {.tabset .tabset-fade}
 
-Before we address our business case and proposed strategies, we would like to highlight a key principle that goes beyond retention. This is the Customer Lifetime Value (CLV), the CLV is a target, not necessarily the retention. If we invest too much in retaining unprofitable clients (sending gifts, calling, offering discount) does this really matter if in the end they are retained but we suffered a net loss? With that said, there is obviously a balance that needs to be drawn somewhere and of course if we can do something to retain our customer cost effectively, we should. It is also commonly known that it is generally much cheaper to retaining a customer than to acquire a new one.
+Before we address our business case and proposed strategies, we would like to highlight a key principle that goes beyond retention. This is Customer Lifetime Value (CLV), the CLV is a target, not necessarily the retention. If we invest too much in retaining unprofitable clients (sending gifts, calling, offering discount) does this really matter if in the end they are retained but we suffered a net loss? With that said, there is obviously a balance that needs to be drawn somewhere and of course if we can do something to retain our customer cost effectively, we should. It is also commonly known that it is generally much cheaper to retaining a customer than to acquire a new one.
 
 Our approach lead us to a three-prong business strategy.
 
 1. Social media presence 
   + As we have seen from a descriptive and modelling perspective, the tweet polarity is by far the most significant contributing factor to determine whether a customer will be retained or not.
-2. New business a target segment
-  + There exists a highly desirable customer segment that we have identified as a focal point for future marketing
-3. Improved product offering
+2. Improved product offering
   + Some customers have been offered products beyond their capacity, by improving our product offering we can improve retention
-
+3. New business target segment
+  + There exists a highly desirable customer segment that we have identified as a focal point for future marketing
+  
 In the next section, we will provide support for these three items.
 
 We will list our assumptions taken where relevant. To start with a few assumptions:
 
-1. An overall profit margin of 5% of the total group, this is important as it will serve us with a sort of "reserve" which we can allocate on an individual level to ascertain how much we can "spend" on them to retain them before they become unprofitable. In reality we should be able to find this exact figure and simply adjust our assumption with that fixed/variable amount. 
+1. An overall profit margin of 5% of the total group, this is important as it will serve us with a sort of **"reserve"** which we can allocate on an individual level to ascertain how much we can **"spend"** on them to retain them before they become unprofitable. In reality we should be able to find this exact figure and simply adjust our assumption with that fixed/variable amount. 
 2. We will also consider all of the clients are eligible to be retained in the future.
 3. The trip prices does not evolve.
 
@@ -5347,47 +5409,11 @@ plt <- plotTarget(datIn = finDF, var_inspect = "pol_med", target = "Retained", p
 plt$plt
 ```
 
-Clearly, if a customer tweets something negatively, the likelihood of retention is nearly `0` and as indicted from the model outputs this is the key feature that drives retention. First of all, we know that there are some individual where we are beyond redemption, even if we were to offer them a 90% discount they will very likely still not be interested in using our service again. It would be completely unwise to pursue these lost cases as there is simply nothing we can do to win them back. Our focus should be focussed on those that we can influence.
+Clearly, if a customer tweets something negatively, the likelihood of retention is nearly $0\%$ and as indicted from the model outputs this is the key feature that drives retention. First of all, we know that there are some individual where we are beyond redemption, even if we were to offer them a $90\%$ discount they will very likely still not be interested in using our service again. It would be completely unwise to pursue these lost cases as there is simply nothing we can do to win them back. Our focus should be focussed on those that we can influence.
 
 The first action is to use a bot to control the company's twitter account. This bot will identify the polarity of tweets that tagged the company, once tagged and identified as a positive or negative tweet, the bot will have a sample of standard tweets and post them as a response. This should seem to be as human as possible as it will show that the company is actively reaching out and trying to respond to their clients, either by saying things like *"we are sorry to hear that you had a bad experience with us, we will take you feedback into account and try our best to improve in the future"* or *"We are glad to hear you enjoyed your trip with us, see you next time!"*. It is also completely possible to have a human (or a team of human) manually respond, however depending on the number of tweets, it might not be feasible. The cost of a bot should be minimal, as it can be built in-house by a great team of Data Scientists!
 
-The second action is to identify the *"swing votes"* some customers who sent a negative tweet still might have a relatively good likelihood of being retained, in these cases, we can manually reach out to them and try to resolve the issue, offering them discounts or a small refund to try to sway them to come back next year. In the last action, we will look at how we can spend that "reserve" as we mentioned before to find the correct customers to win over and what we can offer them. This is even more important when considering high-value customers, for instance, we might even consider taking a financial loss in a particular year to ensure the retention of a future valuable customer.
-
-## New Business Target Segment
-
-For our second action, we identified our new business segment as *High Income* AND *Large Groups*.
-
-There is absolutely nothing revolutionary about this as it makes complete sense to taret wealthy and large groups of individuals, but it remains a key segment both in terms of volume written and retention.
-
-```{r}
-plt <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-```{r}
-plt_a <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue",
-                  numvar = F,
-                  autoBin = F)
-plt_b <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue", var_expo = "SPR_Group_Revenue",
-                  numvar = F,
-                  autoBin = F)
-plotly::subplot(plt_a$plt, plt_b$plt, nrows = 1)
-```
-
-As we can see from the plots above, the higher income groups tend to be retained, additionally the higher income groups have both a higher average revenue per group (plot on the left) and total volume in terms of revenue (plot on the the right - the bars). 
-
-```{r}
-plt <- plotTarget(datIn = finDF, var_inspect = "Total_Pax", target = "Retained",
-                  numvar = T, numVarBreaks = seq(-10,500,1),
-                  autoBin = F)
-plt$plt
-```
-
-From this plot it is also clear that the larger the travel group, the more likely it is that they will retain. As we can see the retention probability flattens out around 30 participants. What we recommend is aiming for this level, building offers and discounting larger groups in order to attract more passengers.
-
-If possible, we would also suggest merging schools together so that total group exceeds 30 passengers. We think this is related to *"the more the merrier"*, meaning the more people on the trip the more fun it is. 
+The second action is to identify the *"swing votes"* some customers who sent a negative tweet still might have a relatively good likelihood of being retained, in these cases, we can manually reach out to them and try to resolve the issue, offering them discounts or a small refund to try to sway them to come back next year. In the last action, we will look at how we can spend that *"reserve"* as we mentioned before to find the correct customers to win over and what we can offer them. This is even more important when considering high-value customers, for instance, we might even consider taking a financial loss in a particular year to ensure the retention of a future valuable customer.
 
 ## Improved Customer Offering {.tabset .tabset-fade}
 
@@ -5433,19 +5459,27 @@ pred <- h2o::h2o.predict(object = finMod, newdata = fin_h2o) %>% as_tibble() %>%
 pred %>% mean()
 ```
 
-Here we can see that indeed if all the lower income segments were to have attended a more affordable program, the overall portfolio retention would have increased by nearly 2%. Or in terms of revenue :
+Here we can see that indeed if all the lower income segments were to have attended a more affordable program, the overall portfolio retention would have increased by nearly $2\%$. Or in terms of revenue :
 
 ```{r}
 print(paste0("Proportion : ", sum(finDF$SPR_Group_Revenue*pred)/sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3), " | Absolute : ", sum(finDF$SPR_Group_Revenue*pred)-sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3)))
 ```
 
-This states that it would have resulted in more than 4% or 162K USD increase in total revenue.
+This states that it would have resulted in more than $4\%$ or $162.000\$$ increase in total revenue.
 
 We conclude that there is a need to better offer the most appropriate product to the correct customer.
 
 ### Portfolio Optimization
 
-For the optimization problem, we will consider optimizing over a single year. The overall idea, is using the profit margin of 5% to control whether at what level of discount we can offer customers to increase their probability of retentions, such that at the new revenue the customer is more profitable.
+For the optimization problem, we will consider optimizing over a single year. The overall idea, is using the profit margin of $5\%$ to control whether at what level of discount we can offer customers to increase their probability of retentions, such that at the new revenue the customer is more profitable.
+
+To illustrate this concept we look at a classic price vs demand plot :
+
+```{r fig.show = "hold", out.width = "75%", fig.align = "center", echo = FALSE}
+knitr::include_graphics("3_misc/pricevsdemand-png.png")
+```
+
+Hence by considering this, we can say that lowering the price should result in a higher demand. There is an obvious **sweet spot** that we aim to find with this study.
 
 We can back-test this strategy by applying a lower `SPR_Group_Revenue` over a few iterations and assessing which discount yields the optimal return.
 
@@ -5500,13 +5534,13 @@ finDF <- finDF %>% mutate(
 (finDF$maxProfit %>% sum())/(finDF$e_profit %>% sum())
 ```
 
-Here we can see an unfortunately low impact, by applying this strategy we find an overall increase of 0.1378% increase in the expected profit. This translates to :
+Here we can see an unfortunately low impact, by applying this strategy we find an overall increase of $0.1378\%$ increase in the expected profit. This translates to :
 
 ```{r}
 finDF$maxProfit %>% sum()-finDF$e_profit %>% sum()
 ```
 
-A small 268.92$ increased overall expected profit.
+A small $268.92\$$ increased overall expected profit.
 
 The fact that the increase is so small might be deemed as insignificant, but just to illustrate the impact we will take a look at the largest difference between the original expected profit and the revised profit :
 
@@ -5517,9 +5551,45 @@ finDF %>%
   select(pred, pred_1, profitMargin, profit_1, e_profit, e_profit_1)
 ```
 
-Here we can see that the impact for this individual is big. Opting to reducing the revenue with 1% leads to a 12% increase in retention probability and an 11.68% increase in the expected profit.
+Here we can see that the impact for this individual is big. Opting to reducing the revenue with $1\%$ leads to a $12\%$ increase in retention probability and an $11.68\%$ increase in the expected profit.
 
 Given the assumption we worked under, there might be a chance to have a further impact on the retention and overall profitability if we had the actual profit margins.
+
+## New Business Target Segment
+
+For our second action, we identified our new business segment as *High Income* AND *Large Groups*.
+
+There is absolutely nothing revolutionary about this as it makes complete sense to target wealthy and large groups of individuals, but it remains a key segment both in terms of volume written and retention.
+
+```{r}
+plt <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "Retained",
+                  numvar = F,
+                  autoBin = F)
+plt$plt
+```
+
+```{r}
+plt_a <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue",
+                  numvar = F,
+                  autoBin = F)
+plt_b <- plotTarget(datIn = finDF, var_inspect = "Income_Level", target = "SPR_Group_Revenue", var_expo = "SPR_Group_Revenue",
+                  numvar = F,
+                  autoBin = F)
+plotly::subplot(plt_a$plt, plt_b$plt, nrows = 1)
+```
+
+As we can see from the plots above, the higher income groups tend to be retained, additionally the higher income groups have both a higher average revenue per group (plot on the left) and total volume in terms of revenue (plot on the the right - the bars). 
+
+```{r}
+plt <- plotTarget(datIn = finDF, var_inspect = "Total_Pax", target = "Retained",
+                  numvar = T, numVarBreaks = seq(-10,500,1),
+                  autoBin = F)
+plt$plt
+```
+
+From this plot it is also clear that the larger the travel group, the more likely it is that they will retain. As we can see the retention probability flattens out around $30$ participants. What we recommend is aiming for this level, building offers and discounting larger groups in order to attract more passengers.
+
+If possible, we would also suggest merging schools together so that total group exceeds $30$ passengers. We think this is related to *"the more the merrier"*, meaning the more people on the trip the more fun it is.
 
 # Conclusion
 

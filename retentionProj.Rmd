@@ -454,245 +454,64 @@ Here we import pandas package for managing Datasets and load the data
 
 ```{python eval = FALSE}
 import pandas as pd
-
-df    = pd.read_csv("0_data/twitter_model.csv", index_col = 0)
-sales = pd.read_csv("0_data/sales_model.csv",   index_col = 0)
-
-df.reset_index(inplace = True)
-```
-
-## Stopwords
-
-Clean twitter dataset for removing English stopwords and applying Tokenize text
-
-```{python eval = FALSE}
-import nltk
-from nltk.tokenize import sent_tokenize, word_tokenize
-from nltk.corpus import stopwords
-from sklearn.feature_extraction import text 
-from sklearn.feature_extraction.text import CountVectorizer
-import re
-
-nltk.download('stopwords')
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('wordnet')
-
-stop_words     = stopwords.words('english')
-stop_words2    = list(text.ENGLISH_STOP_WORDS)
-add_stop_words = ['amp'] # amp is a nosense frequent word
-
-for sw in (stop_words + stop_words2):
-    # Consider all the stopwords without "'". For example "cant" instead of "can't"
-    text = re.sub('\'', '', sw)
-    add_stop_words.append(text)
-
-stop_words = set(stop_words + stop_words2 + add_stop_words)
+df = pd.read_csv("0_data/twitter_model.csv", encoding = 'utf8')
 ```
 
 ## Clean Data
 
-Clean twitter dataset for removing punctuations, special characters, numerical values, special description words 
+Clean twitter data by removing accents, hash tags, hyperlinks and some other things as well.
 
 ```{python eval = FALSE}
+def strip_accents(text):
+    return ''.join(char for char in
+                   unicodedata.normalize('NFKD', text)
+                   if unicodedata.category(char) != 'Mn')
+
+df["text"] = df["text"].apply(strip_accents)
+
 import re
 import string
 
-def clean_text_1(text):
-    text = text.lower() # Lowercase
-    text = re.sub('[%s]' % re.escape(string.punctuation), '', text) # Remove punctuation
-    text = re.sub('[‘’“”…]', '', text) # Remove quotes
-    text = re.sub('\n', ' ', text) # Remove new line
-    text = re.sub('\\w*\\d\\w*', '', text) # Remove words containing numbers
-    text = re.sub('\\[.*?\\]', '', text) # Remove special text in brackets ([chorus],[guitar],etc)
-    words = word_tokenize(text)
-    new_text = ""
-    
-    for w in words:
-        if w not in stop_words and len(w) > 1:
-            new_text = new_text + " " + w
-    
-    # Remove characters that are not letters or spaces
-    new_text = re.sub('[^A-Za-z\\s]+', '', new_text)
-    
-    # Remove words with 1 char
-    new_text = re.sub('\b[A-Za-z]{1}\b', '', new_text)
-    return new_text
+def clean_text(text):
+    text = re.sub('\n',             '',  text) # Remove new line
+    text = re.sub('@\w+ ',          ' ', text) # Removing @mentions
+    text = re.sub('#',              '',  text) # Removing '#' hash tag
+    text = re.sub('https?:\/\/\S+', '',  text) # Removing hyperlink
+    text = re.sub(' +',             ' ', text)
+    text = text.strip()
+    return text
 
-from sklearn.feature_extraction import text 
-from sklearn.feature_extraction.text import CountVectorizer
-from nltk.stem import PorterStemmer
-from nltk.stem import LancasterStemmer
-from nltk.stem import WordNetLemmatizer 
-from nltk import word_tokenize, pos_tag
-from nltk.stem import WordNetLemmatizer
-
-wnl = WordNetLemmatizer()
-
-data_clean = df.copy()
-data_clean['text'] = data_clean['text'].apply(clean_text_1)
-data_clean
+df['clean_text'] = df['text'].apply(clean_text)
+df
 ```
+## Calculate Sentimet
 
-## Lemmatizer
-
-Apply Normalization using Lemmatizer
+Here we calculate the sentiments using the libraries `nlts` and `TextBlob`
 
 ```{python eval = FALSE}
-from nltk.stem import WordNetLemmatizer
-wnl = WordNetLemmatizer()
+from nltk.sentiment import SentimentIntensityAnalyzer
+sia = SentimentIntensityAnalyzer()
 
-def lemmatize_tag(text):
-    lemma=[]
-    for i,j in pos_tag(word_tokenize(text)) :
-        p=j[0].lower()
-        if p in ['j','n','v']:
-            if p == 'j':
-                p = 'a'
-            lemma.append(wnl.lemmatize(i,p))
-        else :
-            lemma.append(wnl.lemmatize(i))    
-    return ' '.join(lemma)
+def sentiment_calc(text):
+    sent = sia.polarity_scores(text)
+    return sent.get("compound")
 
-# Apply lemmatizer
-data_clean_OK      = data_clean.copy()
-data_clean_OK.text = data_clean.text.apply(lemmatize_tag)
-data_clean_OK.text
-```
+df['sentiment'] = df['clean_text'].apply(sentiment_calc)
 
-Creation of document-term matrix : word counts in matrix format
-
-```{python eval = FALSE}
-from sklearn.feature_extraction.text import CountVectorizer
-# Recreate document-term matrix
-cv = CountVectorizer(stop_words=stop_words)
-data_cv = cv.fit_transform(data_clean_OK.text)
-data_stop = pd.DataFrame(data_cv.toarray(), columns=cv.get_feature_names())
-data_stop.index = data_clean_OK.index
-```
-
-Let's make some word clouds : a collection or cluster of the most common/tagged words depicted in different sizes
-
-```{python eval = FALSE}
-# Let's make some word clouds
-from wordcloud import WordCloud, STOPWORDS
-import matplotlib.pyplot as plt
-wc = WordCloud(collocations = False, stopwords = stop_words, background_color = "white", colormap = "Dark2", max_font_size = 150, random_state = 42)
-
-# Reset the output dimensions
-import matplotlib.pyplot as plt
-
-plt.rcParams['figure.figsize'] = [20, 10]
-# Generate the word cloud
-wc.generate(' '.join((data_clean_OK.text.values)))
-
-# Display the word cloud
-plt.imshow(wc, interpolation = 'bilinear')
-plt.axis('off')
-plt.show()
-```
-
-```{r fig.show = "hold", out.width = "50%", fig.align = "center", echo = FALSE}
-knitr::include_graphics("3_misc/wordcloud.png")
-```
-
-## LSA
-
-LSA (Latent Semantic Analysis) : it assumes that words that are close in meaning will occur in similar pieces of text
-
-```{python eval = FALSE}
-cv      = CountVectorizer(min_df = 1, max_df = 1, stop_words = stop_words)
-data_cv = cv.fit_transform(data_clean_OK.text)
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-vectorizer = TfidfVectorizer(stop_words = stop_words)
-tfidf      = vectorizer.fit_transform(data_clean_OK.text)
-data_tfidf = pd.DataFrame(tfidf.toarray(), columns = vectorizer.get_feature_names())
-data_tfidf.index = data_clean_OK.index
-data_tfidf
-```
-
-Apply TruncatedSVD : this transformer performs linear dimensionality reduction by means of truncated singular value decomposition
-
-```{python eval = FALSE}
-from sklearn.decomposition import TruncatedSVD
-
-# SVD represent documents and terms in vectors 
-svd_model = TruncatedSVD(n_components = 30)
-
-svd_model.fit(data_tfidf)
-
-print(svd_model.components_.shape)
-print(svd_model.singular_values_)
-```
-
-## Identify Topics
-
-Identification of the first 30 relevant topics
-
-```{python eval = FALSE}
-terms = vectorizer.get_feature_names()
-
-for i, comp in enumerate(svd_model.components_):
-    terms_comp = zip(terms, comp)
-    sorted_terms = sorted(terms_comp, key= lambda x:x[1], reverse=True)[:7]
-    print("Topic "+str(i)+": ")
-    for t in sorted_terms:
-        print("%.2f*%s "% (t[1], t[0]) ,end='')
-    print("")
-```
-
-## Apply Vader
-
-It helps to decode and quantify the emotions contained in the twitter dataset
-
-```{python eval = FALSE}
-import nltk
-nltk.download('vader_lexicon')
-
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
-
-sid         = SentimentIntensityAnalyzer()
-vader_score = data_clean_OK['text'].apply(lambda text: sid.polarity_scores(text))
-```
-
-## Polarity And Subjectivity
-
-Calculation of Polarity And Subjectivity. Each word is labelled in terms of :
-
-- Polarity : it assumes values between -1 (negative) and +1 (positive)
-- Subjectivity : it assumes values between subjective (0) or fact (+1)
-
-```{python eval = FALSE}
 from textblob import TextBlob
 pol = lambda x: TextBlob(x).sentiment.polarity
 sub = lambda x: TextBlob(x).sentiment.subjectivity
-data_clean_OK['polarity']     = data_clean_OK['text'].apply(pol)
-data_clean_OK['subjectivity'] = data_clean_OK['text'].apply(sub)
-print(data_clean_OK.head())
+df['polarity']     = df['clean_text'].apply(pol)
+df['subjectivity'] = df['clean_text'].apply(sub)
+
+df
 ```
+## Export Data
 
-## Define Thresholds For Topics
-
-Definition of threshold for the first 10 relevant topics. In order to identify the relation between topics and observations, the topic array has been calculated for each twitter
+Export the twitter data results.
 
 ```{python eval = FALSE}
-topic_array = svd_model.transform(data_tfidf)
-topic_array[topic_array >= 0.1] = 1
-topic_array[topic_array <  0.1] = 0.
-
-n_topics       = 10
-columns_name   = [f'TOPIC {i}' for i in range(n_topics)]
-df_topics      = pd.DataFrame(topic_array[:,:n_topics], index = data_clean_OK.index, columns = columns_name)
-df_text_topics = data_clean_OK.merge(df_topics, left_index = True, right_index = True)
-
-# Merge between sales dataset and twitter dataset
-merge_sales = pd.merge(left = df_text_topics, right = sales.Retained, left_on = df_text_topics.ID_SALES, right_index = True)
-merge_sales.drop(columns = ['key_0'], inplace = True)
-
-# Save DB
-merge_sales.to_csv('2_output/1_data/twitter_results.csv', index = False)
+df.to_csv('2_output/1_data/sentTrain.csv', index = False)
 ```
 
 # Data Wrangling {.tabset .tabset-fade}
@@ -999,32 +818,14 @@ From this we can see that we have either 3 or 4 tweets per customer (mostly 3).
 In this section we will merge the twitter data as processed earlier onto our current dataset.
 
 ```{r}
-twiter <- readr::read_csv("2_output/1_data/twitter_results.csv") %>%
+twiter <- readr::read_csv("2_output/1_data/sentTrain.csv", locale = readr::locale(encoding = "latin1")) %>%
   mutate(tweetLength = nchar(text)) %>% 
   group_by(ID_SALES) %>% 
-  summarise(pol_min   = polarity %>% min(na.rm    = TRUE),
-            pol_mean  = polarity %>% mean(na.rm   = TRUE),
-            pol_med   = polarity %>% median(na.rm = TRUE),
-            pol_max   = polarity %>% max(na.rm    = TRUE),
-            sub_min   = subjectivity %>% min(na.rm    = TRUE),
-            sub_mean  = subjectivity %>% mean(na.rm   = TRUE),
+  summarise(pol_med   = polarity     %>% median(na.rm = TRUE),
+            sent_med  = sentiment    %>% median(na.rm = TRUE),
             sub_med   = subjectivity %>% median(na.rm = TRUE),
-            sub_max   = subjectivity %>% max(na.rm    = TRUE),
-            twl_min   = tweetLength %>% min(na.rm    = TRUE),
-            twl_mean  = tweetLength %>% mean(na.rm   = TRUE),
-            twl_med   = tweetLength %>% median(na.rm = TRUE),
-            twl_max   = tweetLength %>% max(na.rm    = TRUE),
-            numTweets = n(),
-            top_0     = `TOPIC 0` %>% sum(na.rm = TRUE),
-            top_1     = `TOPIC 1` %>% sum(na.rm = TRUE),
-            top_2     = `TOPIC 2` %>% sum(na.rm = TRUE),
-            top_3     = `TOPIC 3` %>% sum(na.rm = TRUE),
-            top_4     = `TOPIC 4` %>% sum(na.rm = TRUE),
-            top_5     = `TOPIC 5` %>% sum(na.rm = TRUE),
-            top_6     = `TOPIC 6` %>% sum(na.rm = TRUE),
-            top_7     = `TOPIC 7` %>% sum(na.rm = TRUE),
-            top_8     = `TOPIC 8` %>% sum(na.rm = TRUE),
-            top_9     = `TOPIC 9` %>% sum(na.rm = TRUE))
+            twl_med   = tweetLength  %>% median(na.rm = TRUE),
+            numTweets = n())
 
 finDat <- fin_sales_crm %>% 
   left_join(twiter)
@@ -1041,9 +842,9 @@ Due to the limited knowledge of the datasets we work with, we were forced to tak
 
 Now that we have our full dataset let's take a quick look at the data, how the variables relate to each other and to the target (a customer being retained or not).
 
-In this section we will study the variables one-by-one to ensure that we have a clear and full understanding of how the data works. The reason for investigating the variables one-by-one is that we would like to ensure that we understand each variable appropriately and that we treat it accordingly. This was re-inforced especially after we noticed a few strange occurences in the data.
+In this section we will study the variables one-by-one to ensure that we have a clear and full understanding of how the data works. The reason for investigating the variables one-by-one is that we would like to ensure that we understand each variable appropriately and that we treat it accordingly. This was re-enforced especially after we noticed a few strange occurrences in the data.
 
-We will also investigate the variables from a global perspective and remove redundent variables. 
+We will also investigate the variables from a global perspective and remove redundant variables. 
 
 ## Global Overview
 
@@ -3212,101 +3013,10 @@ PCA for imputation.
 
 We will leave the feature as is (numeric)
 
-### pol_min
-
-This is the minimum polarity of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(pol_min = as.numeric(pol_min),
-                            pol_min = ifelse(is.na(pol_min), 0, pol_min))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_min", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### pol_mean
-
-This is the average polarity of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(pol_mean = as.numeric(pol_mean),
-                            pol_mean = ifelse(is.na(pol_mean), 0, pol_mean))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_mean", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
 
 ### pol_med
 
-This is the median polarity of all the tweets from this individual.
+This is the median polarity of all the tweets from this individual, calculated using the `TextBlob` library.
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "pol_med", target = "Retained",
@@ -3350,12 +3060,12 @@ None
 
 We will leave the feature as is (numeric)
 
-### pol_max
+### sent_med
 
-This is the maximum polarity of all the tweets from this individual.
+This is the median sentiment score of all the tweets from this individual, using the `nltk` library.
 
 ```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
+plt <- plotTarget(datIn = finDat, var_inspect = "sent_med", target = "Retained",
                   numvar = F,
                   autoBin = F)
 plt$plt
@@ -3364,14 +3074,14 @@ plt$plt
 We know this is a numeric variable and we can check the consistency on how it was calculated :
 
 ```{r}
-finDat <- finDat %>% mutate(pol_max = as.numeric(pol_max),
-                            pol_max = ifelse(is.na(pol_max), 0, pol_max))
+finDat <- finDat %>% mutate(sent_med = as.numeric(sent_med),
+                            sent_med = ifelse(is.na(sent_med), 0, sent_med))
 ```
 
 Plotting the variable again as numeric, we find :
 
 ```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
+plt <- plotTarget(datIn = finDat, var_inspect = "sent_med", target = "Retained",
                   numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
                   autoBin = F)
 plt$plt
@@ -3380,99 +3090,7 @@ plt$plt
 Or grouped :
 
 ```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "pol_max", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### sub_min
-
-This is the minimum subjectivity of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(sub_min = as.numeric(sub_min),
-                            sub_min = ifelse(is.na(sub_min), 0, sub_min))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_min", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### sub_mean
-
-This is the average subjectivity of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(sub_mean = as.numeric(sub_mean),
-                            sub_mean = ifelse(is.na(sub_mean), 0, sub_mean))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_mean", target = "Retained",
+plt <- plotTarget(datIn = finDat, var_inspect = "sent_med", target = "Retained",
                   numvar = T,
                   autoBin = F)
 plt$plt
@@ -3534,144 +3152,6 @@ None
 
 We will leave the feature as is (numeric)
 
-### sub_max
-
-This is the maximum subjectivity of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(sub_max = as.numeric(sub_max),
-                            sub_max = ifelse(is.na(sub_max), 0, sub_max))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "sub_max", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### twl_min
-
-This is the minimum tweet length of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(twl_min = as.numeric(twl_min),
-                            twl_min = ifelse(is.na(twl_min), 0, twl_min))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_min", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### twl_mean
-
-This is the average tweet length of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(twl_mean = as.numeric(twl_mean),
-                            twl_mean = ifelse(is.na(twl_mean), 0, twl_mean))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 100, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_mean", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
 ### twl_med
 
 This is the median tweet length of all the tweets from this individual.
@@ -3703,52 +3183,6 @@ Or grouped :
 
 ```{r}
 plt <- plotTarget(datIn = finDat, var_inspect = "twl_med", target = "Retained",
-                  numvar = T,
-                  autoBin = F)
-plt$plt
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### twl_max
-
-This is the maximum tweet length of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(twl_max = as.numeric(twl_max),
-                            twl_max = ifelse(is.na(twl_max), 0, twl_max))
-```
-
-Plotting the variable again as numeric, we find :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
-                  numvar = T, numVarBreaks = c(seq(-100, 150, 0.01)),
-                  autoBin = F)
-plt$plt
-```
-
-Or grouped :
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "twl_max", target = "Retained",
                   numvar = T,
                   autoBin = F)
 plt$plt
@@ -3801,286 +3235,6 @@ None
 
 We will leave the feature as is (numeric)
 
-### top_0
-
-This is the number of times topic 0 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_0", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_0 = as.numeric(top_0),
-                            top_0 = ifelse(is.na(top_0), 0, top_0))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### top_1
-
-This is the number of times topic 1 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_1", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_1 = as.numeric(top_1),
-                            top_1 = ifelse(is.na(top_1), 0, top_1))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-
-
-### top_2
-
-This is the number of times topic 2 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_2", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_2 = as.numeric(top_2),
-                            top_2 = ifelse(is.na(top_2), 0, top_2))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### top_3
-
-This is the number of times topic 3 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_3", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_3 = as.numeric(top_3),
-                            top_3 = ifelse(is.na(top_3), 0, top_3))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-
-### top_4
-
-This is the number of times topic 4 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_4", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_4 = as.numeric(top_4),
-                            top_4 = ifelse(is.na(top_4), 0, top_4))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-### top_5
-
-This is the number of times topic 5 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_5", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_5 = as.numeric(top_5),
-                            top_5 = ifelse(is.na(top_5), 0, top_5))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### top_6
-
-This is the number of times topic 6 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_6", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_6 = as.numeric(top_6),
-                            top_6 = ifelse(is.na(top_6), 0, top_6))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### top_7
-
-This is the number of times topic 7 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_7", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_7 = as.numeric(top_7),
-                            top_7 = ifelse(is.na(top_7), 0, top_7))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-
-### top_8
-
-This is the number of times topic 8 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_8", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_8 = as.numeric(top_8),
-                            top_8 = ifelse(is.na(top_8), 0, top_8))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
-### top_9
-
-This is the number of times topic 9 was tweeted about of all the tweets from this individual.
-
-```{r}
-plt <- plotTarget(datIn = finDat, var_inspect = "top_9", target = "Retained",
-                  numvar = F,
-                  autoBin = F)
-plt$plt
-```
-
-We know this is a numeric variable and we can check the consistency on how it was calculated :
-
-```{r}
-finDat <- finDat %>% mutate(top_9 = as.numeric(top_9),
-                            top_9 = ifelse(is.na(top_9), 0, top_9))
-```
-
-There seems to be some relationship with retention.
-
-#### Missing Values
-
-None
-
-#### Final Feature
-
-We will leave the feature as is (numeric)
 
 ## Global View {.tabset .tabset-fade}
 
@@ -4090,73 +3244,13 @@ There are too many variables to plot all of them in one graph, but we will split
 
 ### Twitter
 
-We start with the twitter data since it is the most obvious set of correlated numeric variables.
-
-#### Polarity
-
-Let's take a look at the polarity.
-
-```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("pol_")), histogram = TRUE)
-```
-
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `pol_med`.
-
-```{r}
-finDat <- finDat %>% select(-c(pol_min, pol_max, pol_mean))
-```
-
-#### Subjectivity
-
-Let's take a look at the subjectivity.
-
-```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("sub_")), histogram = TRUE)
-```
-
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `sub_med`.
-
-```{r}
-finDat <- finDat %>% select(-c(sub_min, sub_max, sub_mean))
-```
-
-#### Tweet Length
-
-Let's take a look at the tweet lengths.
-
-```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("twl_")), histogram = TRUE)
-```
-
-We can see that most of these are highly correlated (unsurprisingly). So we will continue with only the `twl_med`.
-
-```{r}
-finDat <- finDat %>% select(-c(twl_min, twl_max, twl_mean))
-```
-
-#### All Together
-
 Looking at all the twitter information together we find the following :
 
 ```{r}
 PerformanceAnalytics::chart.Correlation(finDat %>% select(ends_with("_med")), histogram = TRUE)
 ```
 
-We can conclude that these aren't that correlated and we can continue with them.
-
-#### Twitter Topics
-
-Let's take a look at the topics we got from the twitter data.
-
-```{r}
-PerformanceAnalytics::chart.Correlation(finDat %>% select(starts_with("top_")), histogram = TRUE)
-```
-
-There aren't any topics that are extremely closely related. However, these topics weren't identified as particularly predictive therefore we will drop them.
-
-```{r}
-finDat <- finDat %>% select(-starts_with("top_"))
-```
+The polarity and the sentiment scores are somewhat correlated, but the difference is a correction for mistakes made by `TextBlob`.
 
 ### Passanger Data
 
@@ -4784,7 +3878,7 @@ res %>% filter(!is.na(f1_score))
 res %>% filter(model %in% c("glm", "nb", "svm", "gbm", "nn"))
 ```
 
-It seems that our GLM still remains the leader. The NN does not improve on any KPI. It is also over-fits the train data.
+It seems that our GBM still remains the leader. The NN does not improve on any KPI. It is also over-fits the train data.
 
 ## Stacking
 
@@ -4831,7 +3925,7 @@ res %>% filter(!is.na(f1_score))
 res %>% filter(model %in% c("glm", "nb", "svm", "gbm", "nn", "stacked"))
 ```
 
-Here we can see that the stacked result increased the overall performance by 0.64, whilst this is indeed better than the GLM, the stacked model over-fits the training data. The preferred model still remains our GLM.
+Here we can see that the stacked result doesn't improve the overall performance, the stacked model over-fits the training data. The preferred model still remains our GBM.
 
 ## AutoML
 
@@ -4894,7 +3988,7 @@ res %>% filter(!is.na(f1_score)) %>% tail(6)
 res %>% tail(6)
 ```
 
-We can see that the automated learning did not prove to be very successful.
+We can see that the automated learning did not prove to be very successful. But still not beating the previously trained GBM.
 
 ## Final Model {.tabset .tabset-fade}
 
@@ -4923,17 +4017,17 @@ for (ii in 1:length(allMods)) {
 allModsRes <- allModsRes %>% mutate(diff = abs(trainF1 - testF1)) %>% arrange(-testF1) %>% filter(trainF1 < 1, diff < 0.05)
 # Store the result
 write.csv(allModsRes, file = "2_output/1_data/allMods.csv", row.names = FALSE)
-allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
+allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"), diff < 0.025) %>% arrange(-testF1)
 ```
 
 ```{r echo = FALSE}
-allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"))
+allModsRes %>% filter(!grepl(x = modID, pattern = "_cv_"), diff < 0.025) %>% arrange(-testF1)
 ```
 
-From this it is clear that we will choose the model **GBM_grid__1_AutoML_20210323_032348_model_14** since it produced the highest **F1-score** and there isn't sufficient proof of over fitting. Here is the model parameters :
+From this it is clear that we will choose the model **gbm_grid_model_51** since it produce a very high **F1-score** and there isn't any proof of over fitting. Here is the model parameters :
 
 ```{r eval = FALSE}
-finMod    <- h2o::h2o.getModel("GBM_grid__1_AutoML_20210323_032348_model_14")
+finMod    <- h2o::h2o.getModel("gbm_grid_model_51")
 finThresh <- finMod@model$default_threshold
 ```
 
@@ -5020,7 +4114,7 @@ Next we take a look at the variable importance.
 plotly::subplot(exm_train$varimp$plots[[1]] %>% ggplotly(), exm_test$varimp$plots[[1]] %>% ggplotly(), nrows = 1)
 ```
 
-We can see that the variable importance is the same for the train and test set. With the tweet polarity being the most important feature. It is worth mentioning that the `avePrice` ranks third in the variable importance, suggesting that price is a key factor to the retention. This is an important fact to mention since we will be focussing on this later on in a sensitivity study.
+We can see that the variable importance is the same for the train and test set. With the tweet polarity being the most important feature. It is worth mentioning that the `avePrice` ranks fifth in the variable importance, suggesting that price is a key factor to the retention. This is an important fact to mention since we will be focussing on this later on in a sensitivity study.
 
 We will also take a look at the SHAP values.
 
@@ -5170,7 +4264,7 @@ In this section we will take a look at how the model performs by considering som
 
 We will inspect the model performance based on a few variables. Hopefully we see that the observed and
 
-#### pol_mean
+#### pol_med
 
 The most important variable is show here on the **test set**.
 
@@ -5282,12 +4376,12 @@ Clearly the model got this one spot on! We can take a look at the contribution o
 lr$shap_explain_row$plots[[1]] %>% ggplotly()
 ```
 
-Here we can see that the main contributors to the low probability is the **pol_med** which equal `-2` and the **sub_med** equalling `2.14`. There exist some positive contributors as well, the **Income_Level** `M` and the **SPR_Product_Type** `Science`.
+Here we can see that the main contributors to the low probability is the **pol_med** which equal `-0.0400` (the number in the plot is the standardized value) and the **Group_State** equalling `OR`. There exist some positive contributors as well, such as the **MajorProgramCode** `H`.
 
 We can also take a look at some ICE plots, to further understand the prediction.
 
 ```{r}
-plotly::subplot(lr$ice$plots$pol_med %>% ggplotly(), lr$ice$plots$avePrice %>% ggplotly(), lr$ice$plots$Income_Level %>% ggplotly(), nrows = 1)
+plotly::subplot(lr$ice$plots$pol_med %>% ggplotly(), lr$ice$plots$avePrice %>% ggplotly(), lr$ice$plots$Program_Code %>% ggplotly(), nrows = 1)
 ```
 
 The dotted line shows where the observation lies, hence it is clear to see, we can clearly see that the contribution of each variable adds to the reason why this individual was predicted to not being retained.
@@ -5320,12 +4414,12 @@ So we can see that as the model prediction is just `0.3%` different from the thr
 mr$shap_explain_row$plots[[1]] %>% ggplotly()
 ```
 
-Here we can see that the main contributors to this prediction is the **MajorProgramCode** and the **pol_med** on the negative side. However, there are a number of positive contributors **Income_Level**, **sub_med** and **Group_State** are some examples.
+Here we can see that the main contributors to this prediction is the **MajorProgramCode** and the **sent_med** on the negative side. However, there are a number of positive contributors **Program_Code**, **avePrice** and **Income_Level** are some examples.
 
 We can also take a look at some ICE plots again, to further understand the prediction.
 
 ```{r}
-plotly::subplot(mr$ice$plots$pol_med %>% ggplotly(), mr$ice$plots$avePrice %>% ggplotly(), mr$ice$plots$Income_Level %>% ggplotly(), nrows = 1)
+plotly::subplot(mr$ice$plots$pol_med %>% ggplotly(), mr$ice$plots$avePrice %>% ggplotly(), mr$ice$plots$Program_Code %>% ggplotly(), nrows = 1)
 ```
 
 Here we can see that that the prediction make complete sense when considering the contributing.As none of these levels give clear confidence whether it should be retained or not.
@@ -5350,12 +4444,12 @@ Clearly the model got this one spot on! We can take a look at the contribution o
 hr$shap_explain_row$plots[[1]] %>% ggplotly()
 ```
 
-Here we can see that the main contributors to the high probability is the **pol_med** and **Income_Level**. There exist some positive contributors as well, the **MajorProgramCode** and the **sub_med**.
+Here we can see that the main contributors to the high positive probability is the **pol_med** and **avePrice**. There exist some negative contributors as well, the **GroupGradeType** and the **SPR_Product_Type**.
 
 We can also take a look at some ICE plots, to further understand the prediction.
 
 ```{r}
-plotly::subplot(hr$ice$plots$pol_med %>% ggplotly(), hr$ice$plots$Income_Level %>% ggplotly(), hr$ice$plots$avePrice %>% ggplotly(), nrows = 1)
+plotly::subplot(hr$ice$plots$pol_med %>% ggplotly(), hr$ice$plots$avePrice %>% ggplotly(), hr$ice$plots$Program_Code %>% ggplotly(), nrows = 1)
 ```
 
 Here we can see that that the prediction make complete sense when considering the contributing.
@@ -5369,10 +4463,14 @@ In addition to what we have done, we tried the following without success :
 1. Created other variables that did not add any value (total discount in USD and $\%$ for example). 
 2. Training the models without removing variables or grouping in order to see if we can improve the models further
 3. Training models using other packages (including `scikit-learn`)
+4. Creating topics from the twitter data
+5. Using the `min`, `max` and `mean` for the twitter features and after testing which is best, the `median` was selected (these were all highly correlated of course)
 
 Performing all these actions lead to a maximum performance of $0.9323$ on the test set. This model was far more complex and over-fit on the training data. Since this was not significantly better than our selected best model we opted to go with the model presented here.
 
 We believe there is some room for further improvements, such as performing MCA to impute categorical missing values, finding some other features or tuning the models a bit better. However, it will take a considerable amount of time to improve the model we have obtained in the end and we are happy with its performance as-is.
+
+**NOTE** as the sentiment is the most important variable, it should be calculated with caution. If an actual negative tweet is identified as a positive tweet, we will almost certainly classify this observation as being retained and vice versa. This has been observed and required us to review our method.
 
 # Business Case {.tabset .tabset-fade}
 
@@ -5409,6 +4507,15 @@ plt <- plotTarget(datIn = finDF, var_inspect = "pol_med", target = "Retained", p
 plt$plt
 ```
 
+We will also consider the median sentiment.
+
+```{r}
+plt <- plotTarget(datIn = finDF, var_inspect = "sent_med", target = "Retained", predVar = "pred",
+                  numvar = T, numVarBreaks = seq(-1, 1, 0.1),
+                  autoBin = F)
+plt$plt
+```
+
 Clearly, if a customer tweets something negatively, the likelihood of retention is nearly $0\%$ and as indicted from the model outputs this is the key feature that drives retention. First of all, we know that there are some individual where we are beyond redemption, even if we were to offer them a $90\%$ discount they will very likely still not be interested in using our service again. It would be completely unwise to pursue these lost cases as there is simply nothing we can do to win them back. Our focus should be focussed on those that we can influence.
 
 The first action is to use a bot to control the company's twitter account. This bot will identify the polarity of tweets that tagged the company, once tagged and identified as a positive or negative tweet, the bot will have a sample of standard tweets and post them as a response. This should seem to be as human as possible as it will show that the company is actively reaching out and trying to respond to their clients, either by saying things like *"we are sorry to hear that you had a bad experience with us, we will take you feedback into account and try our best to improve in the future"* or *"We are glad to hear you enjoyed your trip with us, see you next time!"*. It is also completely possible to have a human (or a team of human) manually respond, however depending on the number of tweets, it might not be feasible. The cost of a bot should be minimal, as it can be built in-house by a great team of Data Scientists!
@@ -5426,7 +4533,7 @@ The second opportunity we identified is to offer customers with an individual re
 With the limited amount of information we have, assuming that all Product Codes are available for each each customer, we noticed that the low income groups have been offered the wrong programs. Consider the following plot :
 
 ```{r}
-plt <- plotTarget(datIn = rbind(trainDF, testDF) %>% filter(Income_Level%in%c("A","B","C","D","E","F","G","H")), var_inspect = "Program_Code", target = "SPR_Group_Revenue",
+plt <- plotTarget(datIn = rbind(trainDF, testDF) %>% filter(Income_Level %in% c("A","B","C","D","E","F","G","H")), var_inspect = "Program_Code", target = "SPR_Group_Revenue",
                   numvar = F, 
                   autoBin = F)
 plt$plt
@@ -5448,7 +4555,7 @@ To start off with, we can see that the overall model prediction is very close to
 finDF_baked <- recipes::prep(blueprint, training = trainDF) %>% recipes::bake(new_data = finDF %>% 
                                                                                 mutate(
                                                                                     Program_Code      = if_else(Income_Level %in% c("A", "B", "C", "D", "E", "F", "G", "H"), "HS", Income_Level)
-                                                                                  , SPR_Group_Revenue = if_else(Income_Level %in% c("A", "B", "C", "D", "E", "F", "G", "H"), finDF$SPR_Group_Revenue[finDF$Program_Code=="HS"] %>% median(), SPR_Group_Revenue)
+                                                                                  , SPR_Group_Revenue = if_else(Income_Level %in% c("A", "B", "C", "D", "E", "F", "G", "H"), finDF$SPR_Group_Revenue[finDF$Program_Code == "HS"] %>% median(), SPR_Group_Revenue)
                                                                                   , avePrice          = as.numeric(SPR_Group_Revenue)/Total_Pax
                                                                                   )
                                                                               )
@@ -5459,13 +4566,13 @@ pred <- h2o::h2o.predict(object = finMod, newdata = fin_h2o) %>% as_tibble() %>%
 pred %>% mean()
 ```
 
-Here we can see that indeed if all the lower income segments were to have attended a more affordable program, the overall portfolio retention would have increased by nearly $2\%$. Or in terms of revenue :
+Here we can see that indeed if all the lower income segments were to have attended a more affordable program, the overall portfolio retention would have increased by more than $2\%$. Or in terms of revenue :
 
 ```{r}
-print(paste0("Proportion : ", sum(finDF$SPR_Group_Revenue*pred)/sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3), " | Absolute : ", sum(finDF$SPR_Group_Revenue*pred)-sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3)))
+print(paste0("Proportion : ", sum(finDF$SPR_Group_Revenue*pred)/sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3), " | Absolute : ", sum(finDF$SPR_Group_Revenue*pred) - sum(finDF$SPR_Group_Revenue*finDF$pred) %>% round(3)))
 ```
 
-This states that it would have resulted in more than $4\%$ or $162.000\$$ increase in total revenue.
+This states that it would have resulted in more than $5.5\%$ or $216.500\$$ increase in total revenue.
 
 We conclude that there is a need to better offer the most appropriate product to the correct customer.
 
@@ -5534,13 +4641,13 @@ finDF <- finDF %>% mutate(
 (finDF$maxProfit %>% sum())/(finDF$e_profit %>% sum())
 ```
 
-Here we can see an unfortunately low impact, by applying this strategy we find an overall increase of $0.1378\%$ increase in the expected profit. This translates to :
+Here we can see an unfortunately low impact, by applying this strategy we find an overall increase of $0.0719\%$ increase in the expected profit. This translates to :
 
 ```{r}
 finDF$maxProfit %>% sum()-finDF$e_profit %>% sum()
 ```
 
-A small $268.92\$$ increased overall expected profit.
+A small $140\$$ increased overall expected profit.
 
 The fact that the increase is so small might be deemed as insignificant, but just to illustrate the impact we will take a look at the largest difference between the original expected profit and the revised profit :
 
@@ -5551,7 +4658,7 @@ finDF %>%
   select(pred, pred_1, profitMargin, profit_1, e_profit, e_profit_1)
 ```
 
-Here we can see that the impact for this individual is big. Opting to reducing the revenue with $1\%$ leads to a $12\%$ increase in retention probability and an $11.68\%$ increase in the expected profit.
+Here we can see that the impact for this individual is big. Opting to reducing the revenue with $1\%$ leads to a $12\%$ increase in retention probability and an $58.79\%$ increase in the expected profit.
 
 Given the assumption we worked under, there might be a chance to have a further impact on the retention and overall profitability if we had the actual profit margins.
 
